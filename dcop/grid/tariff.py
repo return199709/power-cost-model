@@ -22,7 +22,7 @@ Assumptions and limits, v0
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 
 import numpy as np
@@ -251,6 +251,7 @@ def tariff_ledger_lines(
     *,
     contract_demand_kw: float | None = None,
     cp_hours: pd.DatetimeIndex | None = None,
+    mwh_by_year: Mapping[int, float] | None = None,
 ) -> list[LedgerLine]:
     """Annual grid ledger lines (energy, demand, riders/fees, minimum bill) for one site.
 
@@ -259,7 +260,11 @@ def tariff_ledger_lines(
     res = compute_monthly_bills(
         tariff, delivered_kw, contract_demand_kw=contract_demand_kw, cp_hours=cp_hours
     )
-    mwh_year = res.mwh_by_month.groupby(res.mwh_by_month.index // 12).sum()
+    mwh_year = (
+        mwh_by_year
+        if mwh_by_year is not None
+        else res.mwh_by_month.groupby(res.mwh_by_month.index // 12).sum()
+    )
     annual = res.lines.groupby(["year", "category", "subcategory"], as_index=False)["usd"].sum()
     out: list[LedgerLine] = []
     for row in annual.itertuples(index=False):

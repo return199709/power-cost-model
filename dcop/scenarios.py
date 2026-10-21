@@ -1,7 +1,8 @@
 """Deterministic scenario runner (spec §7).
 
 Override keys are dotted paths into the inputs:
-``global.<field>``, ``sites.<site_id>.<field>``, ``tariffs.<tariff_id>.<field>``.
+``global.<field>``, ``sites.<site_id>.<field>``, ``tariffs.<tariff_id>.<field>``,
+``plants.<plant_config_id>.<field>``, ``gas.<hub>.<field>``, ``upgrades.<site_id>.<field>``.
 List elements are addressed by index (``tariffs.T1.riders.0.value``). A path
 that does not exist is an error, and the result is re-validated.
 """
@@ -11,17 +12,60 @@ from __future__ import annotations
 from dataclasses import dataclass, replace
 from typing import Any
 
+import numpy as np
+import pandas as pd
+
+from dcop.btm import availability as avail
+from dcop.btm.gas import gas_ledger_lines
+from dcop.btm.plant import (
+    firm_mw,
+    heat_rate_mmbtu_mwh,
+    plant_ledger_lines,
+    unit_mw_site,
+)
 from dcop.grid.tariff import tariff_ledger_lines
+from dcop.grid.upgrades import upgrade_ledger_lines
 from dcop.io import Inputs
-from dcop.ledger import Ledger
-from dcop.load import delivered_and_unserved, site_load_kw
-from dcop.schemas import GlobalConfig, Site, Tariff
+from dcop.ledger import Ledger, LineFactory
+from dcop.load import mwh_by_year, site_load_kw
+from dcop.schemas import (
+    GasSupply,
+    GlobalConfig,
+    LedgerLine,
+    PlantConfig,
+    Site,
+    Tariff,
+    UpgradeExposure,
+)
+from dcop.timing import (
+    PathTiming,
+    btm_lead_months,
+    build_timing,
+    capacity_mw_series,
+    grid_lead_months,
+    unserved_lines,
+)
+
+
+@dataclass(frozen=True)
+class PathRun:
+    """One (site, path, scenario) result: ledger lines plus timing and energy totals."""
+
+    site_id: str
+    path_id: str
+    scenario_id: str
+    lines: list[LedgerLine]
+    timing: PathTiming
+    load_mwh: float  # what the ramp asks for
+    served_mwh: float  # load within the path's timing and capacity
+    delivered_mwh: float  # after availability and curtailment
 
 
 @dataclass(frozen=True)
 class RunResult:
     ledger: Ledger
     inputs_by_scenario: dict[str, Inputs]  # effective inputs after overrides
+    paths: list[PathRun]
 
 
 def _set_path(root: dict[str, Any], dotted: str, value: Any) -> None:
@@ -59,6 +103,9 @@ def apply_overrides(inputs: Inputs, overrides: dict[str, Any]) -> Inputs:
         "global": inputs.global_cfg.model_dump(),
         "sites": {k: v.model_dump() for k, v in inputs.sites.items()},
         "tariffs": {k: v.model_dump() for k, v in inputs.tariffs.items()},
+        "plants": {k: v.model_dump() for k, v in inputs.plants.items()},
+        "gas": {k: v.model_dump() for k, v in inputs.gas.items()},
+        "upgrades": {k: v.model_dump() for k, v in inputs.upgrades.items()},
     }
     for dotted, value in overrides.items():
         _set_path(tree, dotted, value)
@@ -67,37 +114,131 @@ def apply_overrides(inputs: Inputs, overrides: dict[str, Any]) -> Inputs:
         global_cfg=GlobalConfig.model_validate(tree["global"]),
         sites={k: Site.model_validate(v) for k, v in tree["sites"].items()},
         tariffs={k: Tariff.model_validate(v) for k, v in tree["tariffs"].items()},
+        plants={k: PlantConfig.model_validate(v) for k, v in tree["plants"].items()},
+        gas={k: GasSupply.model_validate(v) for k, v in tree["gas"].items()},
+        upgrades={k: UpgradeExposure.model_validate(v) for k, v in tree["upgrades"].items()},
     )
 
 
-def run_scenario(inputs: Inputs, scenario_id: str) -> tuple[Ledger, Inputs]:
+def _one(items: list[str], site: Site, what: str, override_key: str) -> str:
+    if len(items) > 1:
+        raise ValueError(
+            f"site {site.site_id!r} lists several {what} {items}; a path takes one. "
+            f"Pick one with a scenario override of {override_key}."
+        )
+    return items[0]
+
+
+def _run_grid_path(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series
+) -> PathRun:
+    cfg = eff.global_cfg
+    tariff = eff.tariffs[_one(site.grid_paths, site, "tariffs", f"sites.{site.site_id}.grid_paths")]
+    exposure = eff.upgrades.get(site.site_id)
+    timing = build_timing(
+        "grid", site, cfg.clock_start_date, grid_lead_months(exposure), np.inf, cfg.ops_years
+    )
+    cap_kw = capacity_mw_series(load_kw.index, timing.first_power_date, np.inf) * 1000.0
+    served = np.minimum(load_kw.to_numpy(), cap_kw)
+    delivered = served  # no grid availability or curtailment model yet
+    delivered_kw = pd.Series(delivered, index=load_kw.index)
+    mwh_year = mwh_by_year(delivered_kw)
+    factory = LineFactory(site.site_id, "grid", scenario_id, mwh_year)
+
+    lines = tariff_ledger_lines(
+        site.site_id, scenario_id, tariff, delivered_kw, cfg, mwh_by_year=mwh_year
+    )
+    if exposure is not None:
+        lines += upgrade_ledger_lines(factory, exposure, cfg)
+    lines += unserved_lines(
+        factory, load_kw, served, delivered, timing.first_power_date, cfg.value_of_unserved_usd_mwh
+    )
+    return _path_run(site, "grid", scenario_id, lines, timing, load_kw, served, delivered)
+
+
+def _run_btm_path(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series
+) -> PathRun:
+    cfg = eff.global_cfg
+    plant = eff.plants[_one(site.btm_configs, site, "plants", f"sites.{site.site_id}.btm_configs")]
+    gas = eff.gas[site.gas_hub]  # type: ignore[index]  # presence checked at load
+    unit_mw = unit_mw_site(plant, site)
+    cap_mw = firm_mw(plant, site)
+    timing = build_timing(
+        "btm", site, cfg.clock_start_date, btm_lead_months(plant, gas), cap_mw, cfg.ops_years
+    )
+    first_power = timing.first_power_date
+    index = load_kw.index
+
+    cap_kw = capacity_mw_series(index, first_power, cap_mw) * 1000.0
+    served = np.minimum(load_kw.to_numpy(), cap_kw)
+    required = avail.required_units(served / 1000.0, unit_mw)
+    table = avail.availability_table(plant.n_units, avail.eaf(plant))
+    delivered = served * table[required]
+    delivered_kw = pd.Series(delivered, index=index)
+    mwh_year = mwh_by_year(delivered_kw)
+    factory = LineFactory(site.site_id, "btm", scenario_id, mwh_year)
+
+    # fuel = delivered MWh x heat rate at the part load the running units see
+    hr = heat_rate_mmbtu_mwh(plant, eff.data_dir, served / 1000.0, required, unit_mw, index, first_power)
+    fuel = delivered / 1000.0 * float((index[1] - index[0]) / pd.Timedelta(hours=1)) * hr
+    fuel_year = pd.Series(fuel).groupby(np.asarray(index.year)).sum().to_dict()
+
+    lines = gas_ledger_lines(factory, gas, cfg, eff.data_dir, index, fuel, first_power)
+    lines += plant_ledger_lines(
+        factory, plant, cfg, first_power, mwh_year, fuel_year,
+        lateral_principal_usd=gas.lateral_capex_usd,
+    )
+    lines += unserved_lines(
+        factory, load_kw, served, delivered, first_power, cfg.value_of_unserved_usd_mwh
+    )
+    return _path_run(site, "btm", scenario_id, lines, timing, load_kw, served, delivered)
+
+
+def _path_run(
+    site: Site, path_id: str, scenario_id: str, lines: list[LedgerLine], timing: PathTiming,
+    load_kw: pd.Series, served: np.ndarray, delivered: np.ndarray,
+) -> PathRun:
+    step_h = float((load_kw.index[1] - load_kw.index[0]) / pd.Timedelta(hours=1))
+    to_mwh = step_h / 1000.0
+    return PathRun(
+        site_id=site.site_id,
+        path_id=path_id,
+        scenario_id=scenario_id,
+        lines=lines,
+        timing=timing,
+        load_mwh=float(load_kw.sum() * to_mwh),
+        served_mwh=float(served.sum() * to_mwh),
+        delivered_mwh=float(delivered.sum() * to_mwh),
+    )
+
+
+def run_scenario(inputs: Inputs, scenario_id: str) -> tuple[list[PathRun], Inputs]:
     if scenario_id not in inputs.scenarios:
         raise KeyError(f"unknown scenario {scenario_id!r}; known: {sorted(inputs.scenarios)}")
     eff = apply_overrides(inputs, inputs.scenarios[scenario_id].overrides)
     cfg = eff.global_cfg
-    ledger = Ledger()
+    runs: list[PathRun] = []
     for site in eff.sites.values():
-        if not site.grid_paths:
+        if not (site.grid_paths or site.btm_configs):
             continue
-        if len(site.grid_paths) > 1:
-            raise ValueError(
-                f"site {site.site_id!r} lists several tariffs {site.grid_paths}; the grid path "
-                "takes one. Pick one with a scenario override of sites.<id>.grid_paths."
-            )
-        tariff = eff.tariffs[site.grid_paths[0]]
         load_kw = site_load_kw(site, cfg.ops_years, data_dir=eff.data_dir)
-        # M0: no availability or curtailment model on the grid path yet
-        delivered_kw, _unserved_kw = delivered_and_unserved(load_kw)
-        ledger.extend(tariff_ledger_lines(site.site_id, scenario_id, tariff, delivered_kw, cfg))
-    return ledger, eff
+        if site.grid_paths:
+            runs.append(_run_grid_path(site, eff, scenario_id, load_kw))
+        if site.btm_configs:
+            runs.append(_run_btm_path(site, eff, scenario_id, load_kw))
+    return runs, eff
 
 
 def run_all(inputs: Inputs, scenario_ids: list[str] | None = None) -> RunResult:
     ids = scenario_ids or list(inputs.scenarios)
     ledger = Ledger()
     effective: dict[str, Inputs] = {}
+    paths: list[PathRun] = []
     for sid in ids:
-        part, eff = run_scenario(inputs, sid)
-        ledger.extend(part)
+        runs, eff = run_scenario(inputs, sid)
+        for run in runs:
+            ledger.extend(run.lines)
+        paths += runs
         effective[sid] = eff
-    return RunResult(ledger=ledger, inputs_by_scenario=effective)
+    return RunResult(ledger=ledger, inputs_by_scenario=effective, paths=paths)

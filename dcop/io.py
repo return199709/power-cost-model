@@ -7,14 +7,14 @@ inside the data directory (see SECURITY.md).
 from __future__ import annotations
 
 import copy
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
 import yaml
 
 from dcop.finance import to_real
-from dcop.schemas import GlobalConfig, Scenario, Site, Tariff
+from dcop.schemas import GasSupply, GlobalConfig, PlantConfig, Scenario, Site, Tariff, UpgradeExposure
 
 
 def kw_to_mw(kw: float) -> float:
@@ -48,6 +48,9 @@ class Inputs:
     tariffs: dict[str, Tariff]
     scenarios: dict[str, Scenario]
     data_dir: Path
+    plants: dict[str, PlantConfig] = field(default_factory=dict)
+    gas: dict[str, GasSupply] = field(default_factory=dict)  # keyed by hub
+    upgrades: dict[str, UpgradeExposure] = field(default_factory=dict)  # keyed by site_id
 
 
 def deflate_tariff(raw: dict[str, Any], base_year: int, inflation: float) -> dict[str, Any]:
@@ -102,6 +105,12 @@ def load_scenarios(path: Path | str) -> dict[str, Scenario]:
     )
 
 
+def _load_optional(path: Path, model: type, key: str, what: str) -> dict[str, Any]:
+    if not path.exists():
+        return {}
+    return _by_id([model.model_validate(r) for r in read_yaml(path) or []], key, what)
+
+
 def load_inputs(config_dir: Path | str = "config", data_dir: Path | str | None = None) -> Inputs:
     config_dir = Path(config_dir)
     cfg = load_global(config_dir / "global.yaml")
@@ -112,7 +121,22 @@ def load_inputs(config_dir: Path | str = "config", data_dir: Path | str | None =
         for tariff_id in site.grid_paths:
             if tariff_id not in tariffs:
                 raise ValueError(f"site {site.site_id!r} references unknown tariff {tariff_id!r}")
+    plants = _load_optional(config_dir / "plants.yaml", PlantConfig, "plant_config_id", "plant")
+    gas = _load_optional(config_dir / "gas.yaml", GasSupply, "hub", "gas hub")
+    upgrades = _load_optional(config_dir / "upgrades.yaml", UpgradeExposure, "site_id", "upgrade")
+    for site in sites.values():
+        for plant_id in site.btm_configs:
+            if plant_id not in plants:
+                raise ValueError(f"site {site.site_id!r} references unknown plant {plant_id!r}")
+        if site.btm_configs and site.gas_hub not in gas:
+            raise ValueError(f"site {site.site_id!r} needs gas supply for hub {site.gas_hub!r}")
+    for site_id in upgrades:
+        if site_id not in sites:
+            raise ValueError(f"upgrades given for unknown site {site_id!r}")
     return Inputs(
+        plants=plants,
+        gas=gas,
+        upgrades=upgrades,
         global_cfg=cfg,
         sites=sites,
         tariffs=tariffs,

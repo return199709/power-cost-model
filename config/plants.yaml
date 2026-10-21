@@ -1,0 +1,26 @@
+# PLACEHOLDER plant. Values are round numbers for a reciprocating-engine plant,
+# not vendor quotes. Replace with vendor or EPC data.
+- plant_config_id: RECIP-N2
+  technology: recip
+  unit_mw_iso: 18.0
+  n_units: 8
+  redundancy: "N+2"
+  heat_rate_mmbtu_mwh_hhv_iso: 8.8
+  heat_rate_part_load_curve_ref: processed/part_load_placeholder.csv
+  ambient_derate_pct_per_10c: 0.02
+  elevation_derate_pct_per_1000m: 0.03
+  degradation_pct_yr: 0.003
+  capex_usd_kw: 1800
+  emissions_control_capex_usd_kw: 150
+  fixed_om_usd_kw_yr: 25
+  variable_om_usd_mwh: 6
+  major_maintenance_usd_mwh: 8
+  planned_outage_days_yr: 14
+  forced_outage_rate: 0.03
+  cod_lead_months: 15
+  permit_lead_months: 9
+  nox_limit_compliance: SCR (placeholder)
+  co2_price_usd_t: null
+  emission_factor_t_co2_mmbtu: 0.0531
+  source: placeholder, not vendor data
+  as_of: 2026-10-21

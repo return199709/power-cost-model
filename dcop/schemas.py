@@ -37,6 +37,9 @@ class GlobalConfig(_Model):
     discount_rate: float = Field(0.08, ge=0, lt=1)
     horizon_years: int = Field(15, ge=1)
     ops_start_year: int | None = None
+    # Date the project clock starts; lead times run from here. Defaults to Jan 1 of base_year + 1.
+    clock_start: date | None = None
+    btm_salvage_pct_capex: float = Field(0.0, ge=0, le=1)  # residual value at horizon end
     inflation_pct: float = Field(0.025, ge=-0.1, lt=1)
     value_of_unserved_usd_mwh: float | None = Field(None, ge=0)
     allow_out_of_range: bool = False
@@ -46,6 +49,10 @@ class GlobalConfig(_Model):
     @property
     def first_ops_year(self) -> int:
         return self.ops_start_year if self.ops_start_year is not None else self.base_year + 1
+
+    @property
+    def clock_start_date(self) -> date:
+        return self.clock_start if self.clock_start is not None else date(self.base_year + 1, 1, 1)
 
     @property
     def ops_years(self) -> list[int]:
@@ -196,9 +203,14 @@ class UpgradeItem(_Model):
     on_critical_path: bool
 
     @model_validator(mode="after")
-    def _p90(self) -> UpgradeItem:
+    def _check(self) -> UpgradeItem:
         if self.cost_usd_p90 < self.cost_usd_p50:
             raise ValueError("cost_usd_p90 must be >= cost_usd_p50")
+        if self.refund_schedule:
+            if any(y < 0 or not 0 <= pct <= 1 for y, pct in self.refund_schedule):
+                raise ValueError("refund_schedule entries are (years after payment >= 0, pct 0-1)")
+            if sum(pct for _, pct in self.refund_schedule) > 1 + 1e-9:
+                raise ValueError("refund_schedule cannot refund more than 100%")
         return self
 
 
@@ -213,7 +225,7 @@ class UpgradeExposure(Sourced):
 # 4.4 BTM: gas supply (consumed from M1)
 # --------------------------------------------------------------------------
 class GasSupply(Sourced):
-    hub: str
+    hub: str  # matches Site.gas_hub
     henry_hub_curve_ref: str
     basis_curve_ref: str
     basis_volatility: float = Field(ge=0)
@@ -223,6 +235,13 @@ class GasSupply(Sourced):
     lateral_capex_usd: float = Field(ge=0)
     lateral_lead_months: int = Field(ge=0)
     interruptible_risk_days_yr: float = Field(ge=0)
+
+    @field_validator("hub")
+    @classmethod
+    def _no_dots(cls, v: str) -> str:
+        if "." in v:
+            raise ValueError("ids must not contain '.' (used by scenario override paths)")
+        return v
 
 
 # --------------------------------------------------------------------------
@@ -251,6 +270,13 @@ class PlantConfig(Sourced):
     nox_limit_compliance: str
     co2_price_usd_t: float | None = None
     emission_factor_t_co2_mmbtu: float = 0.0531
+
+    @field_validator("plant_config_id")
+    @classmethod
+    def _no_dots(cls, v: str) -> str:
+        if "." in v:
+            raise ValueError("ids must not contain '.' (used by scenario override paths)")
+        return v
 
     @property
     def redundancy_k(self) -> int:

@@ -3,15 +3,80 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator, Mapping
+from dataclasses import dataclass
 
 import numpy as np
 import pandas as pd
 
-from dcop.schemas import LedgerLine
+from dcop.finance import annuity_schedule
+from dcop.schemas import GlobalConfig, LedgerLine
 
 ID_KEYS = ["site_id", "path_id", "scenario_id"]
 ATOMIC_KEYS = [*ID_KEYS, "year"]
 _COLUMNS = list(LedgerLine.model_fields)
+
+
+@dataclass(frozen=True)
+class LineFactory:
+    """Builds ledger lines for one (site, path, scenario), stamping each with that year's MWh.
+
+    Years with no delivered energy (before first power) carry ``mwh_delivered = 0``.
+    """
+
+    site_id: str
+    path_id: str
+    scenario_id: str
+    mwh_by_year: Mapping[int, float]
+
+    def line(
+        self,
+        year: int,
+        category: str,
+        usd: float,
+        subcategory: str | None = None,
+        *,
+        is_capex: bool = False,
+        is_exposure: bool = False,
+        note: str | None = None,
+    ) -> LedgerLine:
+        return LedgerLine(
+            site_id=self.site_id,
+            path_id=self.path_id,  # type: ignore[arg-type]
+            scenario_id=self.scenario_id,
+            year=int(year),
+            category=category,
+            subcategory=subcategory,
+            usd_real=float(usd),
+            mwh_delivered=float(self.mwh_by_year.get(int(year), 0.0)),
+            is_capex=is_capex,
+            is_exposure=is_exposure,
+            note=note,
+        )
+
+
+def capex_annuity_lines(
+    factory: LineFactory,
+    category: str,
+    principal: float,
+    cfg: GlobalConfig,
+    first_year: int,
+    subcategory: str | None = None,
+    note: str | None = None,
+) -> list[LedgerLine]:
+    """Capital recovery: level payments from ``first_year`` to the end of the horizon.
+
+    Amortizing over the remaining horizon at the discount rate means a later
+    in-service date raises the annual payment, which is how delay shows up in capex.
+    """
+    last_year = cfg.ops_years[-1]
+    if first_year > last_year:
+        raise ValueError(f"{category}: in service in {first_year}, after the horizon ends ({last_year})")
+    n_years = last_year - first_year + 1
+    sched = annuity_schedule(principal, cfg.discount_rate, n_years, first_year)
+    return [
+        factory.line(y, category, pmt, subcategory, is_capex=True, note=note)
+        for y, pmt in sched.items()
+    ]
 
 
 class ReconciliationError(AssertionError):
@@ -37,7 +102,8 @@ class Ledger:
     def validate_mwh(self) -> None:
         """``mwh_delivered`` must be identical across lines of a (site, path, scenario, year)."""
         df = self.to_frame()
-        spread = df.groupby(ATOMIC_KEYS)["mwh_delivered"].agg(lambda s: s.max() - s.min())
+        grp = df.groupby(ATOMIC_KEYS)["mwh_delivered"]
+        spread = (grp.max() - grp.min()) / grp.max().clip(lower=1.0)
         bad = spread[spread > 1e-9]
         if len(bad):
             raise ValueError(f"inconsistent mwh_delivered within {bad.index[0]}")

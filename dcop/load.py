@@ -91,3 +91,9 @@ def delivered_and_unserved(
     """delivered = load x availability x (1 - curtailment); unserved = load - delivered."""
     delivered = load_kw * availability * (1.0 - curtailment)
     return delivered, load_kw - delivered
+
+
+def mwh_by_year(kw: pd.Series) -> dict[int, float]:
+    """Energy in MWh per calendar year from a regular kW series."""
+    step_h = float((kw.index[1] - kw.index[0]) / pd.Timedelta(hours=1))
+    return (kw.groupby(np.asarray(kw.index.year)).sum() * step_h / 1000.0).to_dict()
