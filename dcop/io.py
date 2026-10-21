@@ -76,6 +76,8 @@ def deflate_tariff(raw: dict[str, Any], base_year: int, inflation: float) -> dic
     for rider in raw.get("riders", []):
         if rider["kind"] != "pct_of_bill":
             rider["value"] = real(rider["value"])
+        if rider.get("annual_cap_usd") is not None:
+            rider["annual_cap_usd"] = real(rider["annual_cap_usd"])
     return raw
 
 

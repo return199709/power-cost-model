@@ -91,6 +91,7 @@ def summary_table(result: RunResult) -> pd.DataFrame:
                 "unserved_mwh_total": run.load_mwh - run.delivered_mwh,
                 "peak_kw": eff.sites[site_id].load_mw_peak * 1000.0,
                 "discount_rate": cfg.discount_rate,
+                "notes": "; ".join(run.notes),
             }
         )
     return pd.DataFrame(rows)

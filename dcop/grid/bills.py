@@ -17,6 +17,14 @@ from dcop.schemas import Tariff
 _ORDER = {"customer_charge": 0, "energy": 1, "demand": 2, "riders_fees": 3, "minimum_bill": 4}
 
 
+def _label(category: str, sub: str) -> str:
+    if category == "energy" and sub == "all/all":
+        return "Energy Charge"
+    if category == "energy" and ("/" in sub or sub.startswith("tier ")):
+        return f"Energy {sub}"
+    return sub
+
+
 def round_cents(value: float) -> float:
     return float(Decimal(repr(float(value))).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP))
 
@@ -80,7 +88,8 @@ def monthly_statement(
 ) -> Statement:
     """Itemize the single billing month in ``load_kw``."""
     res = compute_monthly_bills(
-        tariff, load_kw, power_factor=power_factor, contract_demand_kw=contract_demand_kw
+        tariff, load_kw, power_factor=power_factor, contract_demand_kw=contract_demand_kw,
+        service_months_per_year=12,  # a statement is one month of ongoing service
     )
     if len(res.mwh_by_month) != 1:
         raise ValueError("a statement covers exactly one month")
@@ -91,7 +100,7 @@ def monthly_statement(
     items = pd.DataFrame(
         {
             "item": [
-                label.get(sub, ("Energy Charge" if sub == "all/all" else f"Energy {sub}") if cat == "energy" else sub)
+                label.get(sub, _label(cat, sub))
                 for cat, sub in zip(lines["category"], lines["subcategory"])
             ],
             "category": lines["category"].to_numpy(),

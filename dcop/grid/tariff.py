@@ -19,6 +19,13 @@ Assumptions and limits, v0
 - Power factor: pass ``power_factor`` (rounded to the nearest hundredth). Below
   ``power_factor_min`` every measured demand is scaled by min / pf. The tariff
   rounds billed kW; this does not.
+- ``Rider.annual_cap_usd`` caps one rider's charges per calendar year, prorated
+  by billed months / 12. Feed whole calendar years for the cap to mean a full year,
+  or pass ``service_months_per_year`` (a one-month statement passes 12 and assumes
+  no cap was used earlier in the year).
+- ``min_bill_trailing_months``: a month's bill is at least the highest measured kW
+  over the last N months (this month included) x the demand rates, plus the
+  riders marked ``in_minimum_bill``. The shortfall is a ``minimum_bill`` line.
 - Minimum bill (take-or-pay, spec open question 2): a month's bill is at least
   ``min_bill_pct`` x (customer charge + applicable demand rates x contract
   demand). Contract demand defaults to the peak 15-minute demand of the series.
@@ -152,6 +159,7 @@ def compute_monthly_bills(
     prior_demand_kw: Sequence[float] = (),
     cp_hours: pd.DatetimeIndex | None = None,
     power_factor: float | None = None,
+    service_months_per_year: int | None = None,
 ) -> BillResult:
     """Bill ``load_kw`` (a regular, tz-naive series covering whole months) under ``tariff``.
 
@@ -210,6 +218,7 @@ def compute_monthly_bills(
     peak15 = _measured_demand(load_kw, "15min", None, "all", None).reindex(months, fill_value=0.0)
     peak15 = peak15 * pf_factor
     billing_kw: dict[int, float] = {}
+    trailing_demand_usd: dict[int, float] = {}
     applicable: dict[int, list[DemandCharge]] = {k: [] for k in billed}
     for charge in tariff.demand_charges:
         measured = _measured_demand(load_kw, charge.basis, charge.hours, charge.days, cp_hours)
@@ -217,14 +226,30 @@ def compute_monthly_bills(
         bd = _billing_demand(
             measured, charge.ratchet_pct, charge.ratchet_lookback_months, prior_demand_kw
         )
+        trailing = (
+            _billing_demand(measured, 1.0, tariff.min_bill_trailing_months - 1, prior_demand_kw)
+            if tariff.min_bill_trailing_months
+            else None
+        )
         for k in billed:
             if (k % 12) + 1 in charge.months:
                 add(k, CATEGORY_DEMAND, charge.name, bd[k] * charge.usd_per_kw_mo)
+                if trailing is not None:
+                    trailing_demand_usd[k] = trailing_demand_usd.get(k, 0.0) + trailing[k] * charge.usd_per_kw_mo
                 billing_kw[k] = max(billing_kw.get(k, 0.0), float(bd[k]))
                 applicable[k].append(charge)
     rider_kw = {k: billing_kw.get(k, float(peak15[k])) for k in billed}
 
     # --- customer charge and per-unit riders ---
+    billed_per_year: dict[int, int] = {}
+    for k in billed:
+        billed_per_year[k // 12] = (
+            service_months_per_year
+            if service_months_per_year is not None
+            else billed_per_year.get(k // 12, 0) + 1
+        )
+    capped_so_far: dict[tuple[int, str], float] = {}
+    min_bill_riders: dict[int, float] = {k: 0.0 for k in billed}
     for k in billed:
         if tariff.customer_charge_usd_mo:
             add(k, CATEGORY_FEES, "customer_charge", tariff.customer_charge_usd_mo)
@@ -236,7 +261,14 @@ def compute_monthly_bills(
                 "usd_per_kwh": mwh_m[k] * 1000.0,
                 "usd_per_kw_mo": rider_kw[k],
             }[r.kind]
-            add(k, CATEGORY_FEES, r.name, base * r.value)
+            amount = base * r.value
+            if r.annual_cap_usd is not None and amount > 0:
+                room = r.annual_cap_usd * billed_per_year[k // 12] / 12.0 - capped_so_far.get((k // 12, r.name), 0.0)
+                amount = max(0.0, min(amount, room))
+                capped_so_far[(k // 12, r.name)] = capped_so_far.get((k // 12, r.name), 0.0) + amount
+            if r.in_minimum_bill:
+                min_bill_riders[k] += amount
+            add(k, r.category, r.name, amount)
 
     # --- percent-of-bill riders on the subtotal so far ---
     subtotal: dict[int, float] = {}
@@ -245,7 +277,7 @@ def compute_monthly_bills(
     for k in billed:
         for r in tariff.riders:
             if r.kind == "pct_of_bill" and (r.months is None or (k % 12) + 1 in r.months):
-                add(k, CATEGORY_FEES, r.name, r.value * subtotal[k])
+                add(k, r.category, r.name, r.value * subtotal[k])
 
     # --- minimum bill true-up ---
     if tariff.min_bill_pct:
@@ -261,6 +293,16 @@ def compute_monthly_bills(
             if floor > computed[k]:
                 add(k, CATEGORY_MIN_BILL, "min_bill_true_up", floor - computed[k])
 
+    # --- trailing-demand minimum bill ---
+    if tariff.min_bill_trailing_months:
+        computed = {}
+        for k, _, _, usd in rows:
+            computed[k] = computed.get(k, 0.0) + usd
+        for k in billed:
+            floor = trailing_demand_usd.get(k, 0.0) + min_bill_riders[k]
+            if floor > computed[k] + 1e-9:
+                add(k, CATEGORY_MIN_BILL, "min_bill_trailing_demand", floor - computed[k])
+
     frame = pd.DataFrame(rows, columns=["ym", "category", "subcategory", "usd"])
     frame["year"] = frame["ym"] // 12
     frame["month"] = frame["ym"] % 12 + 1
@@ -270,6 +312,27 @@ def compute_monthly_bills(
         mwh_by_month=mwh_m,
         billing_kw_by_month=pd.Series(billing_kw, dtype=float).sort_index(),
     )
+
+
+def monthly_load_factors(load_kw: pd.Series) -> pd.Series:
+    """Load factor per month: kWh / (peak kW x hours in the month), per the tariff glossary.
+
+    Peak is the highest interval demand in the data. The series is indexed by ym.
+    """
+    step_h = _step_hours(load_kw.index)
+    ym = _ym(load_kw.index)
+    kwh = pd.Series(load_kw.to_numpy() * step_h).groupby(ym).sum()
+    peak = pd.Series(load_kw.to_numpy()).groupby(ym).max()
+    hours = pd.Series(1.0, index=load_kw.index).groupby(ym).sum() * step_h
+    return (kwh / (peak * hours)).where(peak > 0)
+
+
+def annual_average_monthly_load_factor(load_kw: pd.Series, year: int) -> float | None:
+    """Average of the 12 monthly load factors in ``year``, or None if any month is unserved."""
+    lf = monthly_load_factors(load_kw)
+    months = [year * 12 + m for m in range(12)]
+    vals = lf.reindex(months)
+    return None if vals.isna().any() else float(vals.mean())
 
 
 def tariff_ledger_lines(

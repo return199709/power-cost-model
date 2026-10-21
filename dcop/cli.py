@@ -20,7 +20,9 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--config-dir", default="config", type=Path)
     run.add_argument("--out", default="outputs", type=Path)
     bill = sub.add_parser("bill", help="itemized Austin Energy FY2026 bill for one month")
-    bill.add_argument("customer", choices=["residential", "commercial"])
+    bill.add_argument("customer", choices=["residential", "commercial", "large"])
+    bill.add_argument("--voltage", choices=["primary", "transmission"], help="large customers")
+    bill.add_argument("--hlf", action="store_true", help="high-load-factor contract (large customers)")
     bill.add_argument("--kwh", type=float, required=True, help="energy used in the month")
     bill.add_argument("--kw", type=float, help="peak 15-minute demand (commercial)")
     bill.add_argument("--pf", type=float, help="power factor at peak, e.g. 0.87")
@@ -30,12 +32,18 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if args.command == "bill":
-        from dcop.grid.austin import commercial_statement, residential_statement
+        from dcop.grid.austin import commercial_statement, large_load_statement, residential_statement
 
         tariffs = load_inputs(args.config_dir).tariffs
         keep = not args.no_psa_admin
         if args.customer == "residential":
             statement = residential_statement(tariffs, args.kwh, include_psa_admin_adjustment=keep)
+        elif args.customer == "large":
+            if args.kw is None or args.voltage is None:
+                parser.error("large bills need --kw and --voltage")
+            statement = large_load_statement(tariffs, args.kwh, args.kw, args.voltage,
+                                             high_load_factor=args.hlf, power_factor=args.pf,
+                                             include_psa_admin_adjustment=keep)
         else:
             if args.kw is None:
                 parser.error("commercial bills need --kw")
@@ -62,6 +70,8 @@ def main(argv: list[str] | None = None) -> int:
         cols = ["site_id", "path_id", "scenario_id", "ldcop_usd_mwh", "year1_usd_mwh", "year5_usd_mwh",
                 "first_power_date", "full_power_date", "availability", "delay_cost_usd"]
         print(summary[cols].to_string(index=False))
+        for row in summary[summary["notes"] != ""].itertuples():
+            print(f"NOTE {row.site_id}/{row.path_id}/{row.scenario_id}: {row.notes}")
         print("\nLevelized $/MWh by component (table view of the stack chart):")
         table = components.pivot_table(index=["scenario_id", "site_id", "path_id"], columns="group",
                                        values="usd_per_mwh", sort=False)

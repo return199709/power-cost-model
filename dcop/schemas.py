@@ -170,6 +170,12 @@ class Rider(_Model):
     kind: Literal["usd_per_mwh", "usd_per_kwh", "usd_per_kw_mo", "pct_of_bill"]
     value: float
     months: list[int] | None = None  # None means every month
+    # Ledger category: the power supply adjustment is energy cost, most others are fees
+    category: Literal["energy", "riders_fees"] = "riders_fees"
+    # Cap on this rider's charges per calendar year, prorated by billed months / 12
+    annual_cap_usd: float | None = Field(None, gt=0)
+    # Counts toward the trailing-demand minimum bill (e.g. the power supply adjustment)
+    in_minimum_bill: bool = False
 
 
 class Tariff(Sourced):
@@ -185,6 +191,10 @@ class Tariff(Sourced):
     customer_charge_usd_mo: float = 0.0
     riders: list[Rider] = Field(default_factory=list)
     min_bill_pct: float | None = Field(None, ge=0, le=1)
+    # Minimum bill = highest billed kW in the last N months x demand rates + in_minimum_bill riders
+    min_bill_trailing_months: int | None = Field(None, ge=1)
+    # Annual average monthly load factor needed to take this schedule (high-load-factor contracts)
+    min_load_factor: float | None = Field(None, gt=0, le=1)
     contract_term_years: int | None = None
     collateral_requirements: str | None = None
     market_indexed: bool = False

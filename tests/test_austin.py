@@ -96,7 +96,8 @@ def test_residential_860_kwh_with_the_psa_administrative_adjustment(tariffs):
 def test_residential_tier_boundaries(tariffs, kwh, energy):
     load = usage_month_load(kwh, None, 2026, 1)
     bill = compute_monthly_bills(tariffs[austin.RESIDENTIAL_ID], load)
-    assert bill.by_category()["energy"] == pytest.approx(energy)
+    tiers = bill.lines[bill.lines.subcategory.str.startswith("tier ")]
+    assert tiers["usd"].sum() == pytest.approx(energy)
 
 
 def test_residential_effective_rate_rises_with_usage(tariffs):
@@ -242,3 +243,14 @@ def test_cli_prints_an_itemized_residential_bill(capsys):
 def test_cli_commercial_requires_demand():
     with pytest.raises(SystemExit):
         main(["bill", "commercial", "--kwh", "1000"])
+
+
+def test_power_supply_adjustment_is_booked_as_energy_and_other_riders_as_fees(tariffs):
+    bill = compute_monthly_bills(tariffs[austin.RESIDENTIAL_ID], usage_month_load(860, None, 2026, 1))
+    cat = bill.lines.set_index("subcategory")["category"]
+    assert cat["Power Supply Adjustment"] == "energy"
+    assert cat["Administrative Adjustment to PSA"] == "energy"
+    assert cat["Regulatory Charge"] == "riders_fees"
+    assert cat["Community Benefit: Customer Assistance Program"] == "riders_fees"
+    # moving the PSA between categories does not change the bill
+    assert bill.total() == pytest.approx(115.3078, abs=1e-4)

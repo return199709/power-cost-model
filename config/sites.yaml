@@ -1,8 +1,9 @@
-# PLACEHOLDER site. Replace with real candidate sites.
+# PLACEHOLDER site. Load, plant and gas inputs are placeholders; the grid tariff is
+# Austin Energy's FY2026 high-load-factor transmission schedule. Replace with real sites.
 - site_id: SITE-A
   name: Placeholder Site A
-  region: PLACEHOLDER
-  utility: Example Utility (synthetic)
+  region: ERCOT (Austin Energy service territory)
+  utility: Austin Energy
   load_mw_peak: 100
   load_mw_ramp:
     - ["2029-Q1", 25]
@@ -15,7 +16,7 @@
   gas_hub: PLACEHOLDER-HUB
   gas_pipeline: Placeholder Pipeline
   lateral_km: 12
-  grid_paths: [EXAMPLE-LGS-TOU]
+  grid_paths: [AE-TRANS-HLF-GE20MW]   # transmission voltage, high load factor contract (PLACEHOLDER choice)
   btm_configs: [RECIP-N2]
   source: placeholder, not real site data
   as_of: 2026-10-21

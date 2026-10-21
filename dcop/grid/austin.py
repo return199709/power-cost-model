@@ -16,6 +16,13 @@ RESIDENTIAL_ID = "AE-RES-INSIDE"
 GS_LT10_ID = "AE-GS-SEC-LT10"
 GS_10_300_ID = "AE-GS-SEC-10-300"
 GS_GE300_ID = "AE-GS-SEC-GE300"
+LGS_PRI_LT3000_ID = "AE-LGS-PRI-LT3000"
+LGS_PRI_3_20_ID = "AE-LGS-PRI-3000-20000"
+LGS_PRI_HLF_3_20_ID = "AE-LGS-PRI-HLF-3000-20000"
+LGS_PRI_GE20_ID = "AE-LGS-PRI-GE20000"
+LGS_PRI_HLF_GE20_ID = "AE-LGS-PRI-HLF-GE20000"
+TRANS_ID = "AE-TRANS"
+TRANS_HLF_ID = "AE-TRANS-HLF-GE20MW"
 PSA_ADMIN_ADJUSTMENT = "Administrative Adjustment to PSA"  # effective Dec 1, 2025
 
 
@@ -27,6 +34,50 @@ def general_service_tariff_id(summer_peak_kw_by_month: Sequence[float]) -> str:
     if avg < 10:
         return GS_LT10_ID
     return GS_10_300_ID if avg < 300 else GS_GE300_ID
+
+
+def large_load_tariff_id(
+    summer_peak_kw_by_month: Sequence[float], voltage: str, high_load_factor: bool = False
+) -> str:
+    """Large General or Transmission schedule for a large customer.
+
+    ``voltage`` is ``"primary"`` (12,470 to 69,000 V) or ``"transmission"`` (69 kV and
+    above). The class comes from the average June-September peak. High-load-factor
+    contracts exist for primary customers of 3,000 kW and above and for transmission
+    customers of 20 MW and above. Eligibility on load factor is checked elsewhere.
+    """
+    if not summer_peak_kw_by_month:
+        raise ValueError("need at least one summer peak demand")
+    avg = sum(summer_peak_kw_by_month) / len(summer_peak_kw_by_month)
+    if voltage == "transmission":
+        if high_load_factor:
+            if avg < 20_000:
+                raise ValueError("high load factor transmission service needs 20,000 kW or more")
+            return TRANS_HLF_ID
+        return TRANS_ID
+    if voltage != "primary":
+        raise ValueError(f"voltage must be 'primary' or 'transmission', got {voltage!r}")
+    if avg < 3_000:
+        if high_load_factor:
+            raise ValueError("high load factor primary service needs 3,000 kW or more")
+        return LGS_PRI_LT3000_ID
+    if avg < 20_000:
+        return LGS_PRI_HLF_3_20_ID if high_load_factor else LGS_PRI_3_20_ID
+    return LGS_PRI_HLF_GE20_ID if high_load_factor else LGS_PRI_GE20_ID
+
+
+def large_load_statement(
+    tariffs: Mapping[str, Tariff], kwh: float, peak_kw: float, voltage: str, *,
+    high_load_factor: bool = False, power_factor: float | None = None,
+    summer_peak_kw_by_month: Sequence[float] | None = None, year: int = 2026, month: int = 1,
+    include_psa_admin_adjustment: bool = True,
+) -> Statement:
+    """Large General or Transmission bill for one month (no history, so no minimum-bill ratchet)."""
+    tariff_id = large_load_tariff_id(summer_peak_kw_by_month or [peak_kw], voltage, high_load_factor)
+    tariff = tariffs[tariff_id]
+    if not include_psa_admin_adjustment:
+        tariff = _without_psa_admin(tariff)
+    return monthly_statement(tariff, usage_month_load(kwh, peak_kw, year, month), power_factor=power_factor)
 
 
 def _without_psa_admin(tariff: Tariff) -> Tariff:

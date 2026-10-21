@@ -21,7 +21,7 @@
 - scenario_id: tariff_redesign
   description: PLACEHOLDER 2%/yr real tariff growth after a large-load redesign
   overrides:
-    tariffs.EXAMPLE-LGS-TOU.escalation_real_pct: 0.02
+    tariffs.AE-TRANS-HLF-GE20MW.escalation_real_pct: 0.02
 - scenario_id: delayed_interconnect
   description: Critical-path substation slips 12 months (30 to 42)
   overrides:

@@ -23,7 +23,7 @@ from dcop.btm.plant import (
     plant_ledger_lines,
     unit_mw_site,
 )
-from dcop.grid.tariff import tariff_ledger_lines
+from dcop.grid.tariff import annual_average_monthly_load_factor, tariff_ledger_lines
 from dcop.grid.upgrades import upgrade_ledger_lines
 from dcop.io import Inputs
 from dcop.ledger import Ledger, LineFactory
@@ -59,6 +59,7 @@ class PathRun:
     load_mwh: float  # what the ramp asks for
     served_mwh: float  # load within the path's timing and capacity
     delivered_mwh: float  # after availability and curtailment
+    notes: tuple[str, ...] = ()  # non-fatal findings, e.g. a tariff eligibility test that fails
 
 
 @dataclass(frozen=True)
@@ -129,6 +130,22 @@ def _one(items: list[str], site: Site, what: str, override_key: str) -> str:
     return items[0]
 
 
+def _eligibility_notes(tariff: Tariff, delivered_kw: pd.Series) -> tuple[str, ...]:
+    """Check a schedule's load factor requirement on the first full calendar year of service."""
+    if tariff.min_load_factor is None:
+        return ()
+    for year in sorted(set(delivered_kw.index.year)):
+        lf = annual_average_monthly_load_factor(delivered_kw, int(year))
+        if lf is None:
+            continue
+        if lf < tariff.min_load_factor:
+            return (f"{tariff.tariff_id}: {year} annual average monthly load factor {lf:.1%} is below "
+                    f"the {tariff.min_load_factor:.0%} this schedule requires",)
+        return ()
+    return (f"{tariff.tariff_id}: no full year of service to test the {tariff.min_load_factor:.0%} "
+            "load factor requirement",)
+
+
 def _run_grid_path(
     site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series
 ) -> PathRun:
@@ -153,7 +170,8 @@ def _run_grid_path(
     lines += unserved_lines(
         factory, load_kw, served, delivered, timing.first_power_date, cfg.value_of_unserved_usd_mwh
     )
-    return _path_run(site, "grid", scenario_id, lines, timing, load_kw, served, delivered)
+    run = _path_run(site, "grid", scenario_id, lines, timing, load_kw, served, delivered)
+    return replace(run, notes=_eligibility_notes(tariff, delivered_kw))
 
 
 def _run_btm_path(

@@ -35,7 +35,13 @@ Austin Energy FY2026 bills (inside city limits, secondary voltage):
 ```
 dcop bill residential --kwh 860
 dcop bill commercial --kwh 20000 --kw 50 [--pf 0.87]
+dcop bill large --kwh 65000000 --kw 100000 --voltage transmission [--hlf]
 ```
+
+The model's site takes the high-load-factor transmission schedule. That schedule
+needs a multi-year contract with an exclusive-supplier clause (on-site backup
+generation is allowed) and an 85% annual average monthly load factor. The summary
+`notes` column flags a site that fails the load factor test.
 
 Add `--no-psa-admin` to leave out the PSA administrative adjustment that took effect
 Dec 1, 2025. The City's quoted typical bill predates it.
