@@ -1,0 +1,17 @@
+# PLACEHOLDER site. Replace with real candidate sites.
+- site_id: SITE-A
+  name: Placeholder Site A
+  region: PLACEHOLDER
+  utility: Example Utility (synthetic)
+  load_mw_peak: 100
+  load_mw_ramp:
+    - ["2027-Q1", 25]
+    - ["2027-Q3", 50]
+    - ["2028-Q1", 100]
+  load_factor: 0.9
+  load_profile_ref: null
+  ambient_c_design: 35
+  elevation_m: 300
+  grid_paths: [EXAMPLE-LGS-TOU]
+  source: placeholder, not real site data
+  as_of: 2026-10-21

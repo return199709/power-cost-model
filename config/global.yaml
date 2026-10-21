@@ -1,0 +1,10 @@
+# Global model settings. All *_pct values are fractions (0.08 = 8%).
+base_year: 2026            # real-dollar year (spec §2)
+discount_rate: 0.08        # real WACC (assumption A1, unconfirmed)
+horizon_years: 15          # annual steps (spec §2, open question 5)
+ops_start_year: 2027       # first operating year; defaults to base_year + 1
+inflation_pct: 0.025       # PLACEHOLDER: used only to deflate nominal inputs
+value_of_unserved_usd_mwh: null   # assumption A2, not yet set (needed from M1)
+allow_out_of_range: false  # spec §9 sanity bounds
+ldcop_bounds_usd_mwh: [20, 250]
+stale_days: 365            # M4: flag inputs older than this

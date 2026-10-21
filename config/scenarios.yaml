@@ -1,0 +1,9 @@
+# Dotted-path overrides: "global.<field>", "sites.<id>.<field>", "tariffs.<id>.<field>".
+# List elements are addressed by index, e.g. tariffs.EXAMPLE-LGS-TOU.riders.0.value
+- scenario_id: base
+  description: Base case, no overrides
+  overrides: {}
+- scenario_id: tariff_redesign
+  description: PLACEHOLDER 2%/yr real tariff growth after a large-load redesign
+  overrides:
+    tariffs.EXAMPLE-LGS-TOU.escalation_real_pct: 0.02
