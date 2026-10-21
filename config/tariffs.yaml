@@ -27,3 +27,101 @@
   escalation_real_pct: 0.0
   source: synthetic test tariff
   as_of: 2026-10-21
+
+# ---------------------------------------------------------------------------
+# City of Austin / Austin Energy, Fiscal Year 2026 Electric Tariff, effective
+# Nov 1, 2025. Inside City Limits, secondary voltage. Rates are transcribed from
+# the tariff PDF: residential p.3-5, general service p.6-8, PSA p.21, PSA
+# administrative adjustment p.23 (effective Dec 1, 2025), CBC p.24, Regulatory
+# Charge p.26. Rates are nominal FY2026 dollars, treated as 2026 real dollars.
+# Not modeled: outside-city rates, discounts, GreenChoice and other riders,
+# Value-of-Solar, sales tax, and the water/other-city-service lines on a bill.
+# ---------------------------------------------------------------------------
+- tariff_id: AE-RES-INSIDE
+  utility: Austin Energy
+  name: Residential Service, inside city limits
+  effective_date: 2025-11-01
+  dollar_year: 2026
+  customer_charge_usd_mo: 16.50
+  energy_tiers:
+    - {up_to_kwh_mo: 300,  usd_per_kwh: 0.04640}
+    - {up_to_kwh_mo: 900,  usd_per_kwh: 0.05138}
+    - {up_to_kwh_mo: 2000, usd_per_kwh: 0.07525}
+    - {up_to_kwh_mo: null, usd_per_kwh: 0.10884}
+  riders:
+    - {name: Power Supply Adjustment, kind: usd_per_kwh, value: 0.04118}
+    - {name: Administrative Adjustment to PSA, kind: usd_per_kwh, value: -0.00206}
+    - {name: "Community Benefit: Customer Assistance Program", kind: usd_per_kwh, value: 0.00564}
+    - {name: "Community Benefit: Service Area Lighting", kind: usd_per_kwh, value: 0.00254}
+    - {name: "Community Benefit: Energy Efficiency Services", kind: usd_per_kwh, value: 0.00457}
+    - {name: Regulatory Charge, kind: usd_per_kwh, value: 0.01338}
+  market_indexed: false
+  escalation_real_pct: 0.0
+  source: "Austin Energy FY2026 Electric Tariff (Nov 1, 2025), pp. 3-5, 21, 23, 24, 26"
+  as_of: 2025-11-01
+
+- tariff_id: AE-GS-SEC-LT10
+  utility: Austin Energy
+  name: General Service, secondary voltage, demand below 10 kW
+  effective_date: 2025-11-01
+  dollar_year: 2026
+  customer_charge_usd_mo: 38.23
+  energy_charges:   # $0.03129/kWh
+    - {season: all, period: all, months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], usd_per_mwh: 31.29}
+  riders:
+    - {name: Power Supply Adjustment, kind: usd_per_kwh, value: 0.04118}
+    - {name: Administrative Adjustment to PSA, kind: usd_per_kwh, value: -0.00206}
+    - {name: "Community Benefit: Customer Assistance Program", kind: usd_per_kwh, value: 0.00237}
+    - {name: "Community Benefit: Service Area Lighting", kind: usd_per_kwh, value: 0.00254}
+    - {name: "Community Benefit: Energy Efficiency Services", kind: usd_per_kwh, value: 0.00457}
+    - {name: Regulatory Charge, kind: usd_per_kwh, value: 0.01338}   # energy basis: no demand rate
+  market_indexed: false
+  escalation_real_pct: 0.0
+  source: "Austin Energy FY2026 Electric Tariff (Nov 1, 2025), pp. 6-7, 21, 23, 24, 26"
+  as_of: 2025-11-01
+
+- tariff_id: AE-GS-SEC-10-300
+  utility: Austin Energy
+  name: General Service, secondary voltage, demand 10 kW to under 300 kW
+  effective_date: 2025-11-01
+  dollar_year: 2026
+  customer_charge_usd_mo: 60.08
+  power_factor_min: 0.90
+  energy_charges:   # $0.01932/kWh
+    - {season: all, period: all, months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], usd_per_mwh: 19.32}
+  demand_charges:
+    - {name: Demand Charge, season: all, months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], usd_per_kw_mo: 9.83, basis: 15min}
+  riders:
+    - {name: Power Supply Adjustment, kind: usd_per_kwh, value: 0.04118}
+    - {name: Administrative Adjustment to PSA, kind: usd_per_kwh, value: -0.00206}
+    - {name: "Community Benefit: Customer Assistance Program", kind: usd_per_kwh, value: 0.00237}
+    - {name: "Community Benefit: Service Area Lighting", kind: usd_per_kwh, value: 0.00254}
+    - {name: "Community Benefit: Energy Efficiency Services", kind: usd_per_kwh, value: 0.00457}
+    - {name: Regulatory Charge, kind: usd_per_kw_mo, value: 3.73}   # demand basis, billed kW
+  market_indexed: false
+  escalation_real_pct: 0.0
+  source: "Austin Energy FY2026 Electric Tariff (Nov 1, 2025), pp. 6-8, 21, 23, 24, 26"
+  as_of: 2025-11-01
+
+- tariff_id: AE-GS-SEC-GE300
+  utility: Austin Energy
+  name: General Service, secondary voltage, demand 300 kW and above
+  effective_date: 2025-11-01
+  dollar_year: 2026
+  customer_charge_usd_mo: 300.42
+  power_factor_min: 0.90
+  energy_charges:   # $0.01840/kWh
+    - {season: all, period: all, months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], usd_per_mwh: 18.40}
+  demand_charges:
+    - {name: Demand Charge, season: all, months: [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12], usd_per_kw_mo: 12.56, basis: 15min}
+  riders:
+    - {name: Power Supply Adjustment, kind: usd_per_kwh, value: 0.04118}
+    - {name: Administrative Adjustment to PSA, kind: usd_per_kwh, value: -0.00206}
+    - {name: "Community Benefit: Customer Assistance Program", kind: usd_per_kwh, value: 0.00237}
+    - {name: "Community Benefit: Service Area Lighting", kind: usd_per_kwh, value: 0.00254}
+    - {name: "Community Benefit: Energy Efficiency Services", kind: usd_per_kwh, value: 0.00457}
+    - {name: Regulatory Charge, kind: usd_per_kw_mo, value: 3.73}
+  market_indexed: false
+  escalation_real_pct: 0.0
+  source: "Austin Energy FY2026 Electric Tariff (Nov 1, 2025), pp. 6-8, 21, 23, 24, 26"
+  as_of: 2025-11-01

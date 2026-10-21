@@ -158,9 +158,16 @@ class DemandCharge(_Model):
         return v
 
 
+class EnergyTier(_Model):
+    """Inclining-block energy rate on monthly usage (e.g. residential)."""
+
+    up_to_kwh_mo: float | None = Field(None, gt=0)  # cumulative upper bound, None means no limit
+    usd_per_kwh: float
+
+
 class Rider(_Model):
     name: str
-    kind: Literal["usd_per_mwh", "usd_per_kw_mo", "pct_of_bill"]
+    kind: Literal["usd_per_mwh", "usd_per_kwh", "usd_per_kw_mo", "pct_of_bill"]
     value: float
     months: list[int] | None = None  # None means every month
 
@@ -170,8 +177,11 @@ class Tariff(Sourced):
     utility: str
     name: str
     effective_date: date
-    energy_charges: list[TOUBlock]
+    energy_charges: list[TOUBlock] = Field(default_factory=list)
+    energy_tiers: list[EnergyTier] = Field(default_factory=list)
     demand_charges: list[DemandCharge] = Field(default_factory=list)
+    # When the power factor at peak is below this, billed kW = metered kW x min / pf
+    power_factor_min: float | None = Field(None, gt=0, le=1)
     customer_charge_usd_mo: float = 0.0
     riders: list[Rider] = Field(default_factory=list)
     min_bill_pct: float | None = Field(None, ge=0, le=1)
@@ -186,6 +196,19 @@ class Tariff(Sourced):
         if "." in v:
             raise ValueError("ids must not contain '.' (used by scenario override paths)")
         return v
+
+    @model_validator(mode="after")
+    def _check_energy(self) -> Tariff:
+        if not self.energy_charges and not self.energy_tiers:
+            raise ValueError("a tariff needs energy_charges or energy_tiers")
+        bounds = [t.up_to_kwh_mo for t in self.energy_tiers]
+        if self.energy_tiers and (
+            bounds[-1] is not None
+            or any(b is None for b in bounds[:-1])
+            or bounds[:-1] != sorted(bounds[:-1])
+        ):
+            raise ValueError("energy_tiers need ascending bounds and a final tier with no limit")
+        return self
 
 
 # --------------------------------------------------------------------------

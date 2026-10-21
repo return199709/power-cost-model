@@ -19,7 +19,30 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--scenario", action="append", help="scenario id (repeatable); default all")
     run.add_argument("--config-dir", default="config", type=Path)
     run.add_argument("--out", default="outputs", type=Path)
+    bill = sub.add_parser("bill", help="itemized Austin Energy FY2026 bill for one month")
+    bill.add_argument("customer", choices=["residential", "commercial"])
+    bill.add_argument("--kwh", type=float, required=True, help="energy used in the month")
+    bill.add_argument("--kw", type=float, help="peak 15-minute demand (commercial)")
+    bill.add_argument("--pf", type=float, help="power factor at peak, e.g. 0.87")
+    bill.add_argument("--no-psa-admin", action="store_true",
+                      help="leave out the Dec 1, 2025 PSA administrative adjustment")
+    bill.add_argument("--config-dir", default="config", type=Path)
     args = parser.parse_args(argv)
+
+    if args.command == "bill":
+        from dcop.grid.austin import commercial_statement, residential_statement
+
+        tariffs = load_inputs(args.config_dir).tariffs
+        keep = not args.no_psa_admin
+        if args.customer == "residential":
+            statement = residential_statement(tariffs, args.kwh, include_psa_admin_adjustment=keep)
+        else:
+            if args.kw is None:
+                parser.error("commercial bills need --kw")
+            statement = commercial_statement(tariffs, args.kwh, args.kw, power_factor=args.pf,
+                                             include_psa_admin_adjustment=keep)
+        print(statement.render())
+        return 0
 
     inputs = load_inputs(args.config_dir)
     result = run_all(inputs, args.scenario)

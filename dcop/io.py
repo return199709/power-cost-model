@@ -69,6 +69,8 @@ def deflate_tariff(raw: dict[str, Any], base_year: int, inflation: float) -> dic
     raw["customer_charge_usd_mo"] = real(raw.get("customer_charge_usd_mo", 0.0))
     for block in raw.get("energy_charges", []):
         block["usd_per_mwh"] = real(block["usd_per_mwh"])
+    for tier in raw.get("energy_tiers", []):
+        tier["usd_per_kwh"] = real(tier["usd_per_kwh"])
     for charge in raw.get("demand_charges", []):
         charge["usd_per_kw_mo"] = real(charge["usd_per_kw_mo"])
     for rider in raw.get("riders", []):

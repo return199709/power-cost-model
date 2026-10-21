@@ -15,6 +15,10 @@ Assumptions and limits, v0
   charges that apply that month, else on the measured 15-minute peak.
 - ``pct_of_bill`` riders apply to the month's subtotal (customer + energy +
   demand + per-unit riders). They do not compound on each other.
+- Energy tiers bill each month's total kWh in blocks (inclining-block rates).
+- Power factor: pass ``power_factor`` (rounded to the nearest hundredth). Below
+  ``power_factor_min`` every measured demand is scaled by min / pf. The tariff
+  rounds billed kW; this does not.
 - Minimum bill (take-or-pay, spec open question 2): a month's bill is at least
   ``min_bill_pct`` x (customer charge + applicable demand rates x contract
   demand). Contract demand defaults to the peak 15-minute demand of the series.
@@ -133,6 +137,13 @@ def _billing_demand(
     return pd.Series(out, index=measured.index)
 
 
+def _power_factor_scale(tariff: Tariff, power_factor: float | None) -> float:
+    if tariff.power_factor_min is None or power_factor is None:
+        return 1.0
+    pf = round(power_factor, 2)  # tariff rounds to the nearest hundredth
+    return tariff.power_factor_min / pf if pf < tariff.power_factor_min else 1.0
+
+
 def compute_monthly_bills(
     tariff: Tariff,
     load_kw: pd.Series,
@@ -140,6 +151,7 @@ def compute_monthly_bills(
     contract_demand_kw: float | None = None,
     prior_demand_kw: Sequence[float] = (),
     cp_hours: pd.DatetimeIndex | None = None,
+    power_factor: float | None = None,
 ) -> BillResult:
     """Bill ``load_kw`` (a regular, tz-naive series covering whole months) under ``tariff``.
 
@@ -166,9 +178,21 @@ def compute_monthly_bills(
     def add(month_key: int, category: str, sub: str, usd: float) -> None:
         rows.append((month_key, category, sub, float(usd)))
 
+    # --- energy tiers: monthly kWh allocated across blocks ---
+    for k in billed:
+        lower, remaining = 0.0, float(mwh_m[k]) * 1000.0
+        for i, tier in enumerate(tariff.energy_tiers, start=1):
+            if remaining <= 0:
+                break
+            width = remaining if tier.up_to_kwh_mo is None else min(remaining, tier.up_to_kwh_mo - lower)
+            label = f"tier {i} ({lower:g}-{tier.up_to_kwh_mo:g} kWh)" if tier.up_to_kwh_mo else f"tier {i} (over {lower:g} kWh)"
+            add(k, CATEGORY_ENERGY, label, width * tier.usd_per_kwh)
+            remaining -= width
+            lower = tier.up_to_kwh_mo if tier.up_to_kwh_mo is not None else lower
+
     # --- energy: every interval must match exactly one block ---
     block_masks = [_mask(index, b.months, b.hours, b.days) for b in tariff.energy_charges]
-    coverage = np.sum(block_masks, axis=0) if block_masks else np.zeros(len(index), int)
+    coverage = np.sum(block_masks, axis=0) if block_masks else np.ones(len(index), int)
     if (coverage != 1).any():
         bad = int(np.argmax(coverage != 1))
         raise ValueError(
@@ -182,12 +206,14 @@ def compute_monthly_bills(
                 add(k, CATEGORY_ENERGY, f"{block.season}/{block.period}", block_mwh[k] * block.usd_per_mwh)
 
     # --- demand (with ratchet) ---
+    pf_factor = _power_factor_scale(tariff, power_factor)
     peak15 = _measured_demand(load_kw, "15min", None, "all", None).reindex(months, fill_value=0.0)
+    peak15 = peak15 * pf_factor
     billing_kw: dict[int, float] = {}
     applicable: dict[int, list[DemandCharge]] = {k: [] for k in billed}
     for charge in tariff.demand_charges:
         measured = _measured_demand(load_kw, charge.basis, charge.hours, charge.days, cp_hours)
-        measured = measured.reindex(months, fill_value=0.0)
+        measured = measured.reindex(months, fill_value=0.0) * pf_factor
         bd = _billing_demand(
             measured, charge.ratchet_pct, charge.ratchet_lookback_months, prior_demand_kw
         )
@@ -205,7 +231,11 @@ def compute_monthly_bills(
         for r in tariff.riders:
             if r.kind == "pct_of_bill" or (r.months is not None and (k % 12) + 1 not in r.months):
                 continue
-            base = mwh_m[k] if r.kind == "usd_per_mwh" else rider_kw[k]
+            base = {
+                "usd_per_mwh": mwh_m[k],
+                "usd_per_kwh": mwh_m[k] * 1000.0,
+                "usd_per_kw_mo": rider_kw[k],
+            }[r.kind]
             add(k, CATEGORY_FEES, r.name, base * r.value)
 
     # --- percent-of-bill riders on the subtotal so far ---
