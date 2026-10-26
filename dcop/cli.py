@@ -19,6 +19,13 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--scenario", action="append", help="scenario id (repeatable); default all")
     run.add_argument("--config-dir", default="config", type=Path)
     run.add_argument("--out", default="outputs", type=Path)
+    mc = sub.add_parser("mc", help="Monte Carlo P-values, upgrade exposure and tornado")
+    mc.add_argument("--scenario", default="base")
+    mc.add_argument("--draws", type=int, help="number of draws (default from distributions.yaml)")
+    mc.add_argument("--seed", type=int)
+    mc.add_argument("--workers", type=int, help="processes (default up to 4)")
+    mc.add_argument("--config-dir", default="config", type=Path)
+    mc.add_argument("--out", default="outputs", type=Path)
     bill = sub.add_parser("bill", help="itemized Austin Energy FY2026 bill for one month")
     bill.add_argument("customer", choices=["residential", "commercial", "large"])
     bill.add_argument("--voltage", choices=["primary", "transmission"], help="large customers")
@@ -30,6 +37,9 @@ def main(argv: list[str] | None = None) -> int:
                       help="leave out the Dec 1, 2025 PSA administrative adjustment")
     bill.add_argument("--config-dir", default="config", type=Path)
     args = parser.parse_args(argv)
+
+    if args.command == "mc":
+        return _run_mc(args)
 
     if args.command == "bill":
         from dcop.grid.austin import commercial_statement, large_load_statement, residential_statement
@@ -77,4 +87,46 @@ def main(argv: list[str] | None = None) -> int:
                                        values="usd_per_mwh", sort=False)
         print(table.to_string())
     print(f"\nwrote summary, ledger and components parquet files and charts to {args.out}/")
+    return 0
+
+
+def _run_mc(args: argparse.Namespace) -> int:
+    from dcop.io import load_distributions
+    from dcop.montecarlo import default_workers, run_monte_carlo
+    from dcop.reports import exposure_table, tornado_chart
+    from dcop.scenarios import RunCache, apply_overrides, run_sensitivities
+
+    inputs = load_inputs(args.config_dir)
+    dist = load_distributions(args.config_dir / "distributions.yaml")
+    workers = args.workers or default_workers()
+    result = run_monte_carlo(inputs, dist, args.scenario, n=args.draws, seed=args.seed, workers=workers)
+    eff = apply_overrides(inputs, inputs.scenarios[args.scenario].overrides)
+    exposure = exposure_table(eff)
+    sens = run_sensitivities(inputs, args.scenario, dist.sensitivities, RunCache())
+
+    args.out.mkdir(parents=True, exist_ok=True)
+    result.draws.to_parquet(args.out / "mc_draws.parquet", index=False)
+    result.summary.to_parquet(args.out / "mc_summary.parquet", index=False)
+    result.upgrade_exposure.to_parquet(args.out / "upgrade_exposure.parquet", index=False)
+    exposure.to_parquet(args.out / "exposure_table.parquet", index=False)
+    sens.to_parquet(args.out / "tornado.parquet", index=False)
+    for site_id in sorted(set(sens["site_id"])) if len(sens) else []:
+        tornado_chart(sens, site_id, args.out / f"tornado_{args.scenario}_{site_id}.png")
+
+    with pd.option_context("display.width", 160, "display.float_format", "{:,.2f}".format):
+        print(f"Monte Carlo: scenario {args.scenario}, {result.n_draws} draws, seed {result.seed}\n")
+        cols = ["site_id", "path_id", "ldcop_base", "ldcop_p10", "ldcop_p50", "ldcop_p90", "n_failed", "p_grid_cheaper"]
+        print(result.summary[cols].to_string(index=False))
+        print("\nFirst power (base, P10, P50, P90):")
+        for r in result.summary.itertuples():
+            print(f"  {r.site_id}/{r.path_id}: {r.first_power_base:%Y-%m-%d}  {r.first_power_p10:%Y-%m-%d}  "
+                  f"{r.first_power_p50:%Y-%m-%d}  {r.first_power_p90:%Y-%m-%d}")
+        print("\nUpgrade exposure (gross allocated $, before refunds):")
+        print(result.upgrade_exposure.to_string(index=False))
+        print("\nUnconfirmed upgrade items:")
+        print(exposure.to_string(index=False) if len(exposure) else "  none")
+        print("\nTornado, largest swings (table view of the chart):")
+        top = sens[sens["swing"] > 1e-9].sort_values("swing", ascending=False).groupby(["site_id", "path_id"]).head(6)
+        print(top[["site_id", "path_id", "label", "range", "ldcop_low", "ldcop_base", "ldcop_high"]].to_string(index=False))
+    print(f"\nwrote Monte Carlo, exposure and tornado outputs to {args.out}/")
     return 0

@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 from dcop.finance import to_real
-from dcop.schemas import GasSupply, GlobalConfig, PlantConfig, Scenario, Site, Tariff, UpgradeExposure
+from dcop.schemas import Distributions, GasSupply, GlobalConfig, PlantConfig, Scenario, Site, Tariff, UpgradeExposure
 
 
 def kw_to_mw(kw: float) -> float:
@@ -107,6 +107,10 @@ def load_scenarios(path: Path | str) -> dict[str, Scenario]:
     return _by_id(
         [Scenario.model_validate(r) for r in read_yaml(path) or []], "scenario_id", "scenario"
     )
+
+
+def load_distributions(path: Path | str) -> Distributions:
+    return Distributions.model_validate(read_yaml(path) or {})
 
 
 def _load_optional(path: Path, model: type, key: str, what: str) -> dict[str, Any]:

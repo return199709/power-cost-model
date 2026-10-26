@@ -4,7 +4,8 @@ Each item costs ``P(trigger) x allocation x P50`` as a lump sum in the year its
 lead time ends (clock start + lead_time_months). Items with ``ciac`` are
 non-refundable. Others refund ``cost x pct`` at ``payment year + years`` per
 ``refund_schedule`` (negative lines); refunds that land after the horizon are
-dropped. P90 values, probabilistic sampling and the exposure table are M3.
+dropped. A Monte Carlo draw sets ``cost_usd_sampled`` (used instead of the P50) and sets the
+probability to 0 or 1.
 """
 
 from __future__ import annotations
@@ -19,7 +20,8 @@ def upgrade_ledger_lines(
 ) -> list[LedgerLine]:
     lines: list[LedgerLine] = []
     for item in exposure.items:
-        expected = item.probability_triggered * item.allocation_pct * item.cost_usd_p50
+        cost = item.cost_usd_sampled if item.cost_usd_sampled is not None else item.cost_usd_p50
+        expected = item.probability_triggered * item.allocation_pct * cost
         if expected == 0:
             continue
         pay_year = add_months(cfg.clock_start_date, item.lead_time_months).year

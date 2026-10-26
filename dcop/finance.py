@@ -8,6 +8,8 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 
+import pandas as pd
+
 
 def discount_factor(rate: float, t: float) -> float:
     return (1.0 + rate) ** (-t)
@@ -60,3 +62,13 @@ def levelize(
     if denom <= 0:
         raise ValueError("NPV of delivered MWh must be positive to levelize")
     return npv(cost_by_year, rate, base_year) / denom
+
+
+def online_fraction(year: int, start: pd.Timestamp) -> float:
+    """Share of calendar ``year`` on or after ``start``."""
+    if year < start.year:
+        return 0.0
+    if year > start.year:
+        return 1.0
+    days = (pd.Timestamp(year=year, month=12, day=31) - start.normalize()).days + 1
+    return days / (366 if pd.Timestamp(year=year, month=1, day=1).is_leap_year else 365)

@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 from collections.abc import Sequence
+from functools import lru_cache
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -93,7 +94,28 @@ def delivered_and_unserved(
     return delivered, load_kw - delivered
 
 
+@lru_cache(maxsize=16)
+def _calendar(first_ns: int, last_ns: int, n: int, freq_ns: int) -> tuple[np.ndarray, np.ndarray]:
+    index = pd.DatetimeIndex(pd.date_range(pd.Timestamp(first_ns), periods=n, freq=pd.Timedelta(freq_ns, "ns")))
+    return np.asarray(index.year), np.asarray(index.month)
+
+
+def calendar_arrays(index: pd.DatetimeIndex) -> tuple[np.ndarray, np.ndarray]:
+    """Year and month of every timestamp in a regular index. Cached, since the index repeats."""
+    freq_ns = int((index[1] - index[0]).value) if len(index) > 1 else 1
+    years, months = _calendar(int(index[0].value), int(index[-1].value), len(index), freq_ns)
+    return years, months
+
+
+def sum_by_year(values: np.ndarray, index: pd.DatetimeIndex) -> dict[int, float]:
+    """Sum of ``values`` per calendar year."""
+    years, _ = calendar_arrays(index)
+    first = int(years[0])
+    sums = np.bincount(years - first, weights=np.asarray(values, dtype=float))
+    return {first + i: float(v) for i, v in enumerate(sums)}
+
+
 def mwh_by_year(kw: pd.Series) -> dict[int, float]:
     """Energy in MWh per calendar year from a regular kW series."""
     step_h = float((kw.index[1] - kw.index[0]) / pd.Timedelta(hours=1))
-    return (kw.groupby(np.asarray(kw.index.year)).sum() * step_h / 1000.0).to_dict()
+    return {y: v * step_h / 1000.0 for y, v in sum_by_year(kw.to_numpy(), kw.index).items()}

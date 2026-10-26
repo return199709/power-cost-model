@@ -8,7 +8,9 @@ from dataclasses import dataclass
 import numpy as np
 import pandas as pd
 
-from dcop.finance import annuity_schedule
+import pandas as pd
+
+from dcop.finance import online_fraction
 from dcop.schemas import GlobalConfig, LedgerLine
 
 ID_KEYS = ["site_id", "path_id", "scenario_id"]
@@ -59,23 +61,33 @@ def capex_annuity_lines(
     category: str,
     principal: float,
     cfg: GlobalConfig,
-    first_year: int,
+    first_year: int | pd.Timestamp,
     subcategory: str | None = None,
     note: str | None = None,
 ) -> list[LedgerLine]:
-    """Capital recovery: level payments from ``first_year`` to the end of the horizon.
+    """Capital recovery from the in-service date to the end of the horizon.
 
-    Amortizing over the remaining horizon at the discount rate means a later
-    in-service date raises the annual payment, which is how delay shows up in capex.
+    ``first_year`` is a year (in service on Jan 1) or an exact date. Payments are level,
+    except that the first year is prorated to the part of it after the in-service date.
+    Their size makes the present value equal the principal discounted from that date, so
+    a later date lowers the discounted outlay but shortens the recovery period, and a date
+    one day later changes the result by almost nothing. For a Jan 1 start this is an
+    ordinary level annuity over the remaining years.
     """
+    start = pd.Timestamp(year=first_year, month=1, day=1) if isinstance(first_year, int) else pd.Timestamp(first_year)
     last_year = cfg.ops_years[-1]
-    if first_year > last_year:
-        raise ValueError(f"{category}: in service in {first_year}, after the horizon ends ({last_year})")
-    n_years = last_year - first_year + 1
-    sched = annuity_schedule(principal, cfg.discount_rate, n_years, first_year)
+    if start.year > last_year:
+        raise ValueError(f"{category}: in service in {start.year}, after the horizon ends ({last_year})")
+    r = cfg.discount_rate
+    weights = {y: online_fraction(y, start) for y in range(start.year, last_year + 1)}
+    year_start = pd.Timestamp(year=start.year, month=1, day=1)
+    days_in_year = 366 if year_start.is_leap_year else 365
+    t0 = (start.year - (cfg.base_year + 1)) + (start.normalize() - year_start).days / days_in_year
+    denom = sum(w * (1.0 + r) ** -(y - cfg.base_year) for y, w in weights.items())
+    payment = principal * (1.0 + r) ** -t0 / denom
     return [
-        factory.line(y, category, pmt, subcategory, is_capex=True, note=note)
-        for y, pmt in sched.items()
+        factory.line(y, category, payment * w, subcategory, is_capex=True, note=note)
+        for y, w in weights.items()
     ]
 
 

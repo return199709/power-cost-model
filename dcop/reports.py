@@ -1,6 +1,6 @@
 """Summary tables, levelized components, charts, and run-time validation (spec §6, §8, §9).
 
-Still to come: exposure P50/P90 (M3), tornado (M3), assumptions.md (M4).
+Still to come: assumptions.md and staleness flags (M4).
 """
 
 from __future__ import annotations
@@ -12,6 +12,7 @@ import pandas as pd
 
 from dcop.finance import levelize, npv
 from dcop.ledger import ID_KEYS, ReconciliationError, reconcile
+from dcop.io import Inputs
 from dcop.load import ramp_mw
 from dcop.scenarios import PathRun, RunResult
 
@@ -287,6 +288,88 @@ def timing_chart(result: RunResult, scenario_id: str, path: Path) -> None:
     for text in leg.get_texts():
         text.set_color(_INK_2)
     fig.subplots_adjust(left=0.10, right=0.96, top=top - 0.05, bottom=0.14 + 0.1 / len(sites), hspace=0.25)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    fig.savefig(path, dpi=_DPI, facecolor=_SURFACE)
+    plt.close(fig)
+
+
+def exposure_table(eff: Inputs, include_confirmed: bool = False) -> pd.DataFrame:
+    """Upgrade items by site (spec §8, output 6).
+
+    By default only unconfirmed items (probability below 1) are listed. The expected
+    allocated cost is probability x allocation x P50.
+    """
+    rows = []
+    for site_id, exposure in eff.upgrades.items():
+        for item in exposure.items:
+            if item.probability_triggered >= 1.0 and not include_confirmed:
+                continue
+            rows.append({
+                "site_id": site_id, "item": item.name, "study_source": exposure.study_source,
+                "probability_triggered": item.probability_triggered,
+                "cost_usd_p10": item.cost_usd_p10_effective, "cost_usd_p50": item.cost_usd_p50,
+                "cost_usd_p90": item.cost_usd_p90, "allocation_pct": item.allocation_pct,
+                "expected_allocated_usd": item.probability_triggered * item.allocation_pct * item.cost_usd_p50,
+                "ciac": item.ciac, "lead_time_months": item.lead_time_months,
+                "on_critical_path": item.on_critical_path,
+                "confirmed": item.probability_triggered >= 1.0,
+            })
+    return pd.DataFrame(rows)
+
+
+def tornado_chart(table: pd.DataFrame, site_id: str, path: Path, top: int = 12) -> None:
+    """Tornado for one site: LDCoP at each input's low and high value, grid and BTM side by side."""
+    import matplotlib
+
+    matplotlib.use("Agg")
+    import matplotlib.pyplot as plt
+    from matplotlib.patches import Patch
+
+    site = table[(table["site_id"] == site_id) & (table["swing"] > 1e-9)]
+    paths = [p for p in ("grid", "btm") if (site["path_id"] == p).any()]
+    if not paths:
+        raise ValueError(f"no sensitivities with an effect for site {site_id!r}")
+    rows = max(min(top, (site["path_id"] == p).sum()) for p in paths)
+    fig, axes = plt.subplots(1, len(paths), figsize=(6.2 * len(paths) + 1.0, 1.9 + 0.42 * rows), dpi=_DPI,
+                             facecolor=_SURFACE, squeeze=False)
+    for ax, path_id in zip(axes[0], paths):
+        _style_axes(ax)
+        ax.yaxis.grid(False)
+        ax.xaxis.grid(True, color=_GRID, linewidth=1, linestyle="-")
+        d = site[site["path_id"] == path_id].nlargest(top, "swing").iloc[::-1]  # biggest at the top
+        base = float(d["ldcop_base"].iloc[0])
+        y = np.arange(len(d))
+        height = 0.6
+        low_w = d["ldcop_low"].to_numpy() - base
+        high_w = d["ldcop_high"].to_numpy() - base
+        # where both ends move the same way, draw the longer bar first so the shorter one shows on top
+        for yi, lo_w, hi_w in zip(y, low_w, high_w):
+            for width_, color in sorted(((lo_w, _SERIES[0]), (hi_w, _SERIES[1])), key=lambda t: -abs(t[0])):
+                ax.barh(yi, width_, height, left=base, color=color, edgecolor=_SURFACE, linewidth=1.44)
+        ax.axvline(base, color=_INK_2, linewidth=1)
+        ax.set_yticks(y, [f"{lbl}\n{rng}" for lbl, rng in zip(d["label"], d["range"])], fontsize=8)
+        ax.tick_params(axis="y", colors=_INK_2)
+        ax.yaxis.set_tick_params(pad=6)
+        # label only the three biggest bars at their tips; the table view carries the rest
+        for yi, lo, hi in list(zip(y, d["ldcop_low"], d["ldcop_high"]))[-3:]:
+            for v in (lo, hi):
+                if abs(v - base) < 1e-9:
+                    continue
+                ax.text(v + (0.25 if v >= base else -0.25), yi, f"{v:,.1f}", va="center",
+                        ha="left" if v >= base else "right", fontsize=8, color=_INK)
+        span = float(max(d[["ldcop_low", "ldcop_high"]].max().max() - base, base - d[["ldcop_low", "ldcop_high"]].min().min()))
+        ax.set_xlim(base - span * 1.35, base + span * 1.35)
+        ax.set_xlabel("Levelized cost, real $/MWh", fontsize=9, color=_INK_2)
+        ax.set_title(f"{path_id.upper()}: base {base:,.1f} $/MWh", fontsize=10, color=_INK, loc="left", fontweight="bold")
+    handles = [Patch(facecolor=_SERIES[0], label="Input at its low value"),
+               Patch(facecolor=_SERIES[1], label="Input at its high value")]
+    leg = fig.legend(handles=handles, loc="lower center", ncol=2, frameon=False, fontsize=9)
+    for text in leg.get_texts():
+        text.set_color(_INK_2)
+    scenario = site["scenario_id"].iloc[0]
+    fig.suptitle(f"What moves the cost: {site_id}, scenario {scenario}", x=0.01, ha="left", fontsize=12,
+                 color=_INK, fontweight="bold")
+    fig.tight_layout(rect=(0, 0.07, 1, 0.95))
     path.parent.mkdir(parents=True, exist_ok=True)
     fig.savefig(path, dpi=_DPI, facecolor=_SURFACE)
     plt.close(fig)

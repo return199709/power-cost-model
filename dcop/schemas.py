@@ -84,6 +84,7 @@ class Site(Sourced):
     gas_hub: str | None = None
     gas_pipeline: str | None = None
     lateral_km: float | None = Field(None, ge=0)
+    tariff_docket_open: bool = False  # manual flag: utility has an open large-load tariff docket
     grid_paths: list[str] = Field(default_factory=list)  # tariff_ids
     btm_configs: list[str] = Field(default_factory=list)  # plant_config_ids
 
@@ -226,6 +227,7 @@ class Tariff(Sourced):
 # --------------------------------------------------------------------------
 class UpgradeItem(_Model):
     name: str
+    cost_usd_p10: float | None = Field(None, ge=0)  # default: mirror of P90 around P50, floored at 0
     cost_usd_p50: float = Field(ge=0)
     cost_usd_p90: float = Field(ge=0)
     probability_triggered: float = Field(ge=0, le=1)
@@ -234,11 +236,21 @@ class UpgradeItem(_Model):
     refund_schedule: list[tuple[int, float]] | None = None  # [(year, pct refunded)]
     lead_time_months: int = Field(ge=0)
     on_critical_path: bool
+    # Set by Monte Carlo draws: replaces the P50 in the cost lines
+    cost_usd_sampled: float | None = Field(None, ge=0)
+
+    @property
+    def cost_usd_p10_effective(self) -> float:
+        if self.cost_usd_p10 is not None:
+            return self.cost_usd_p10
+        return max(0.0, 2.0 * self.cost_usd_p50 - self.cost_usd_p90)
 
     @model_validator(mode="after")
     def _check(self) -> UpgradeItem:
         if self.cost_usd_p90 < self.cost_usd_p50:
             raise ValueError("cost_usd_p90 must be >= cost_usd_p50")
+        if self.cost_usd_p10 is not None and self.cost_usd_p10 > self.cost_usd_p50:
+            raise ValueError("cost_usd_p10 must be <= cost_usd_p50")
         if self.refund_schedule:
             if any(y < 0 or not 0 <= pct <= 1 for y, pct in self.refund_schedule):
                 raise ValueError("refund_schedule entries are (years after payment >= 0, pct 0-1)")
@@ -261,7 +273,9 @@ class GasSupply(Sourced):
     hub: str  # matches Site.gas_hub
     henry_hub_curve_ref: str
     basis_curve_ref: str
-    basis_volatility: float = Field(ge=0)
+    basis_volatility: float = Field(ge=0)  # lognormal sigma of the basis shock (Monte Carlo)
+    basis_adder_usd_mmbtu: float = 0.0  # added to the basis curve; Monte Carlo and sensitivities set it
+    henry_hub_multiplier: float = Field(1.0, gt=0)  # scales the Henry Hub curve
     transport_firm_usd_mmbtu: float = Field(ge=0)
     transport_commodity_usd_mmbtu: float = Field(ge=0)
     fuel_retention_pct: float = Field(ge=0, lt=1)
@@ -323,6 +337,60 @@ class Scenario(_Model):
     scenario_id: str
     overrides: dict[str, Any] = Field(default_factory=dict)
     description: str = ""
+
+
+# --------------------------------------------------------------------------
+# 7 Monte Carlo and sensitivity settings (config/distributions.yaml)
+# --------------------------------------------------------------------------
+class DiscreteDist(_Model):
+    """Discrete months of slip, added to a lead time."""
+
+    values: list[int]
+    probs: list[float]
+
+    @model_validator(mode="after")
+    def _check(self) -> DiscreteDist:
+        if len(self.values) != len(self.probs) or not self.values:
+            raise ValueError("values and probs must be the same non-zero length")
+        if any(v < 0 for v in self.values) or any(p < 0 for p in self.probs):
+            raise ValueError("values and probs must be non-negative")
+        if abs(sum(self.probs) - 1.0) > 1e-9:
+            raise ValueError("probs must sum to 1")
+        return self
+
+
+class BasisDist(_Model):
+    scale_usd_mmbtu: float = Field(ge=0)  # shock = scale x (lognormal factor with mean 1, minus 1)
+
+
+class EforDist(_Model):
+    concentration: float = Field(gt=0)  # beta with mean = the plant's EFOR and alpha + beta = this
+
+
+class SensitivitySpec(_Model):
+    """One-at-a-time input range for the tornado.
+
+    ``path`` is an override path that may use ``{site}``, ``{tariff}``, ``{hub}``,
+    ``{plant}`` and ``*`` for every element of a list. ``absolute`` sets the value,
+    ``relative`` scales it by (1 + low) and (1 + high), ``delta`` adds low and high.
+    """
+
+    label: str
+    path: str
+    mode: Literal["absolute", "relative", "delta"]
+    low: float
+    high: float
+
+
+class Distributions(_Model):
+    n_draws: int = Field(2000, ge=1)
+    seed: int = 0
+    basis: BasisDist | None = None
+    upgrade_cost: bool = True  # sample item costs from P10/P50/P90 and trigger items by probability
+    interconnection_slip_months: DiscreteDist | None = None  # added to critical-path upgrade lead times
+    permit_slip_months: DiscreteDist | None = None  # added to the BTM permit lead time
+    efor: EforDist | None = None
+    sensitivities: list[SensitivitySpec] = Field(default_factory=list)
 
 
 # --------------------------------------------------------------------------

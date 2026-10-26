@@ -12,7 +12,7 @@ as described in [SECURITY.md](SECURITY.md).
 | M0 schemas, loaders, finance, ledger, grid path with a hand-entered tariff | built, with one open item below |
 | M1 BTM path, timing engine, stack chart | built, on placeholder inputs |
 | M2 all sites, both paths, deterministic scenarios | scenario runner and all seven spec scenarios exist; real sites pending |
-| M3 upgrade exposure, Monte Carlo, tornado | not started |
+| M3 upgrade exposure, Monte Carlo, tornado | built, on placeholder distributions |
 | M4 assumptions dump, staleness flags | not started |
 
 M0 bill replication: the Austin Energy FY2026 residential bill reproduces the City
@@ -45,6 +45,18 @@ generation is allowed) and an 85% annual average monthly load factor. The summar
 
 Add `--no-psa-admin` to leave out the PSA administrative adjustment that took effect
 Dec 1, 2025. The City's quoted typical bill predates it.
+
+Monte Carlo, upgrade exposure and tornado:
+
+```
+dcop mc [--scenario base] [--draws 2000] [--workers 4]
+```
+
+This samples gas basis, upgrade costs, interconnection and permit slip, and plant
+outage rates from `config/distributions.yaml`. It writes P10/P50/P90 of the levelized
+cost and first-power date, the share of draws where grid is cheaper, upgrade exposure
+P50/P90, the unconfirmed upgrade items, and a one-at-a-time tornado chart. 2,000 draws
+take about 25 seconds on four workers. Henry Hub is covered by the tornado, not sampled.
 
 `dcop run` writes `summary`, `ledger` and `components` parquet files plus a
 stack chart and a timing chart per scenario to `outputs/`.

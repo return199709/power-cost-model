@@ -4,25 +4,33 @@ Curves are CSV files with columns ``month`` (YYYY-MM) and ``usd_mmbtu`` in real
 base-year dollars. A request after the last month holds the last value flat. A
 request before the first month is an error.
 
-    gas_delivered[m] = (HH[m] + basis[m]) / (1 - fuel_retention) + transport_commodity
+    gas_delivered[m] = (HH[m] x multiplier + basis[m] + adder) / (1 - fuel_retention) + transport_commodity
 
 ``interruptible_risk_days_yr`` is not modeled in v0.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
 import pandas as pd
 
 from dcop.io import resolve_ref
+from dcop.finance import online_fraction  # noqa: F401  (re-exported for plant.py and tests)
 from dcop.ledger import LineFactory, capex_annuity_lines
+from dcop.load import calendar_arrays
 from dcop.schemas import GasSupply, GlobalConfig, LedgerLine
 
 
 def load_curve(path: Path) -> pd.Series:
-    """Monthly curve indexed by ym (``year * 12 + month - 1``)."""
+    """Monthly curve indexed by ym (``year * 12 + month - 1``). Cached per file version."""
+    return _load_curve(str(path), path.stat().st_mtime_ns).copy()
+
+
+@lru_cache(maxsize=64)
+def _load_curve(path: str, _mtime_ns: int) -> pd.Series:
     df = pd.read_csv(path)
     if not {"month", "usd_mmbtu"} <= set(df.columns):
         raise ValueError(f"{path}: needs columns 'month' and 'usd_mmbtu'")
@@ -50,22 +58,12 @@ def monthly_price_components(
     gross = 1.0 / (1.0 - gas.fuel_retention_pct)
     return pd.DataFrame(
         {
-            "henry_hub": hh * gross,
-            "basis": basis * gross,
+            "henry_hub": hh * gas.henry_hub_multiplier * gross,
+            "basis": (basis + gas.basis_adder_usd_mmbtu) * gross,
             "transport_commodity": gas.transport_commodity_usd_mmbtu,
         },
         index=ym,
     )
-
-
-def online_fraction(year: int, first_power: pd.Timestamp) -> float:
-    """Share of ``year`` on or after the first-power date."""
-    if year < first_power.year:
-        return 0.0
-    if year > first_power.year:
-        return 1.0
-    days = (pd.Timestamp(year=year, month=12, day=31) - first_power.normalize()).days + 1
-    return days / (366 if pd.Timestamp(year=year, month=1, day=1).is_leap_year else 365)
 
 
 def gas_ledger_lines(
@@ -78,8 +76,9 @@ def gas_ledger_lines(
     first_power: pd.Timestamp,
 ) -> list[LedgerLine]:
     """Fuel by price component, fixed firm transport, and lateral capital recovery."""
-    ym = np.asarray(index.year) * 12 + np.asarray(index.month) - 1
-    monthly_fuel = pd.Series(fuel_mmbtu).groupby(ym).sum()
+    years, months = calendar_arrays(index)
+    ym = years * 12 + months - 1
+    monthly_fuel = pd.Series(np.bincount(ym - ym[0], weights=fuel_mmbtu), index=np.arange(ym[0], ym[-1] + 1))
     prices = monthly_price_components(gas, data_dir, monthly_fuel.index.to_numpy())
     cost = prices.mul(monthly_fuel, axis=0)
     cost["year"] = monthly_fuel.index.to_numpy() // 12
@@ -102,7 +101,5 @@ def gas_ledger_lines(
                              note=f"mdq_mmbtu_d={mdq:.0f}")
             )
     if gas.lateral_capex_usd:
-        lines += capex_annuity_lines(
-            factory, "lateral", gas.lateral_capex_usd, cfg, first_power.year
-        )
+        lines += capex_annuity_lines(factory, "lateral", gas.lateral_capex_usd, cfg, first_power)
     return lines

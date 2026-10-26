@@ -5,13 +5,14 @@ Simplifications, v0
 - No ambient heat-rate adjustment (``ambient_hr_adj = 1``): the config has no input for it.
 - Units run at equal load; the number running is the minimum that carries the load.
 - Heat rate degrades linearly from the first-power year.
-- Capital recovery starts in the first-power year, not prorated, and ignores
-  construction-period financing.
+- Capital recovery starts at the first-power date, prorated in that year, and
+  ignores construction-period financing.
 - Fixed O&M is prorated for the part of the first-power year the plant is online.
 """
 
 from __future__ import annotations
 
+from functools import lru_cache
 from pathlib import Path
 
 import numpy as np
@@ -20,6 +21,7 @@ import pandas as pd
 from dcop.btm.gas import online_fraction
 from dcop.io import resolve_ref
 from dcop.ledger import LineFactory, capex_annuity_lines
+from dcop.load import calendar_arrays
 from dcop.schemas import GlobalConfig, LedgerLine, PlantConfig, Site
 
 ISO_AMBIENT_C = 15.0
@@ -41,7 +43,12 @@ def installed_kw(plant: PlantConfig) -> float:
 
 
 def load_part_load_curve(path: Path) -> tuple[np.ndarray, np.ndarray]:
-    """CSV with ``load_fraction`` and ``heat_rate_multiplier`` (1.0 at full load)."""
+    """CSV with ``load_fraction`` and ``heat_rate_multiplier`` (1.0 at full load). Cached per file version."""
+    return _load_part_load_curve(str(path), path.stat().st_mtime_ns)
+
+
+@lru_cache(maxsize=64)
+def _load_part_load_curve(path: str, _mtime_ns: int) -> tuple[np.ndarray, np.ndarray]:
     df = pd.read_csv(path).sort_values("load_fraction")
     if not {"load_fraction", "heat_rate_multiplier"} <= set(df.columns):
         raise ValueError(f"{path}: needs columns load_fraction, heat_rate_multiplier")
@@ -61,7 +68,7 @@ def heat_rate_mmbtu_mwh(
     with np.errstate(divide="ignore", invalid="ignore"):
         frac = np.where(required > 0, served_mw / (required * unit_mw), 1.0)
     mult = np.interp(frac, fractions, multipliers)
-    years_in_service = np.maximum(0, np.asarray(index.year) - first_power.year)
+    years_in_service = np.maximum(0, calendar_arrays(index)[0] - first_power.year)
     return plant.heat_rate_mmbtu_mwh_hhv_iso * mult * (1.0 + plant.degradation_pct_yr * years_in_service)
 
 
@@ -79,9 +86,9 @@ def plant_ledger_lines(
     plant_principal = plant.capex_usd_kw * kw
     emissions_principal = plant.emissions_control_capex_usd_kw * kw
     if plant_principal:
-        lines += capex_annuity_lines(factory, "plant_capex", plant_principal, cfg, first_power.year)
+        lines += capex_annuity_lines(factory, "plant_capex", plant_principal, cfg, first_power)
     if emissions_principal:
-        lines += capex_annuity_lines(factory, "emissions_controls", emissions_principal, cfg, first_power.year)
+        lines += capex_annuity_lines(factory, "emissions_controls", emissions_principal, cfg, first_power)
 
     for year in cfg.ops_years:
         frac = online_fraction(year, first_power)

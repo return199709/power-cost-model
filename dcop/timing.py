@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 from dcop.ledger import LineFactory
-from dcop.load import ramp_mw
+from dcop.load import ramp_mw, sum_by_year
 from dcop.schemas import GasSupply, PlantConfig, Site, UpgradeExposure
 
 
@@ -106,10 +106,9 @@ def unserved_lines(
         ("unserved_energy", "capacity_shortfall"): np.where(pre, 0.0, load - served_kw),
         ("unserved_energy", "availability"): served_kw - delivered_kw,
     }
-    years = np.asarray(index.year)
     lines = []
     for (category, sub), kw in parts.items():
-        mwh_by_year = pd.Series(kw * step_h / 1000.0).groupby(years).sum()
+        mwh_by_year = {y: v * step_h / 1000.0 for y, v in sum_by_year(kw, index).items()}
         for year, mwh in mwh_by_year.items():
             if mwh <= 1e-6:
                 continue
