@@ -1,67 +1,58 @@
 # power-cost-model
 
-Delivered Cost of Power (DCoP) model: the all-in cost of delivering power to a
-site load in $/MWh, for a grid path and a behind-the-meter gas path. The full
-design is in [DCOP_MODEL_SPEC.md](DCOP_MODEL_SPEC.md). Report security issues
-as described in [SECURITY.md](SECURITY.md).
+Delivered Cost of Power (DCoP) model: the all-in cost of delivering power to a site
+load in $/MWh, for a grid path and a behind-the-meter (BTM) gas path. Design:
+[DCOP_MODEL_SPEC.md](DCOP_MODEL_SPEC.md). Sourcing and audit:
+[docs/SOURCING.md](docs/SOURCING.md). Security: [SECURITY.md](SECURITY.md).
 
 ## Status
 
+All five milestones in the spec are built. The inputs are not real yet.
+
 | Milestone | State |
 |---|---|
-| M0 schemas, loaders, finance, ledger, grid path with a hand-entered tariff | built, with one open item below |
-| M1 BTM path, timing engine, stack chart | built, on placeholder inputs |
-| M2 all sites, both paths, deterministic scenarios | scenario runner and all seven spec scenarios exist; real sites pending |
-| M3 upgrade exposure, Monte Carlo, tornado | built, on placeholder distributions |
-| M4 assumptions dump, staleness flags | not started |
+| M0 schemas, loaders, finance, ledger, grid path | built |
+| M1 BTM path, timing engine, stack chart | built |
+| M2 all sites, both paths, deterministic scenarios | runner and the seven spec scenarios built; one placeholder site |
+| M3 upgrade exposure, Monte Carlo, tornado | built |
+| M4 assumptions dump, staleness flags, docs | built |
 
-M0 bill replication: the Austin Energy FY2026 residential bill reproduces the City
-of Austin's published typical bill (860 kWh, $117.07). That figure came from a
-search summary of the city's budget documents, because the city site was not
-reachable from the build environment, so check it against the source. The
-commercial bills are worked by hand from the tariff, since no published
-commercial sample bill was found.
+**Real data:** the Austin Energy FY2026 tariff, transcribed from the tariff PDF
+(effective Nov 1, 2025). Its residential bill reproduces the City's published typical
+bill of $117.07 for 860 kWh, from a search summary of the City's documents. The
+commercial and large-load bills are worked by hand from the tariff.
+
+**Placeholders:** the site, load profile, plant, gas supply and curves, upgrade items,
+value of unserved energy, discount rate, and every Monte Carlo and tornado range. Results
+show the model works, not what a real site would cost. `dcop audit` lists every one.
 
 ## Run
 
 ```
 pip install -e ".[dev]"
 pytest
-dcop run --scenario base          # all scenarios if --scenario is omitted
+dcop run [--scenario base]        # costs, charts, assumptions.md; all scenarios if omitted
+dcop mc [--draws 2000]            # Monte Carlo P-values, upgrade exposure, tornado
+dcop audit [--strict]             # assumptions.md only; --strict fails on placeholders
+dcop bill residential --kwh 860   # itemized Austin Energy bill; also commercial and large
 ```
 
-Austin Energy FY2026 bills (inside city limits, secondary voltage):
+Outputs go to `outputs/` (git-ignored): `summary`, `ledger`, `components` and Monte Carlo
+parquet files, stack, timing and tornado charts, and `assumptions.md`.
+
+## Layout
 
 ```
-dcop bill residential --kwh 860
-dcop bill commercial --kwh 20000 --kw 50 [--pf 0.87]
-dcop bill large --kwh 65000000 --kw 100000 --voltage transmission [--hlf]
+config/       inputs: global, sites, tariffs, plants, gas, upgrades, scenarios,
+              distributions, and the assumptions register
+data/         curves and profiles, with sources.yaml recording where each came from
+dcop/         the package: schemas, io, load, timing, finance, ledger, scenarios,
+              montecarlo, reports, assumptions; grid/ and btm/ path engines
+tests/        hand-worked expectations; run them before committing
+docs/         SOURCING.md
 ```
 
-The model's site takes the high-load-factor transmission schedule. That schedule
-needs a multi-year contract with an exclusive-supplier clause (on-site backup
-generation is allowed) and an 85% annual average monthly load factor. The summary
-`notes` column flags a site that fails the load factor test.
+## Conventions
 
-Add `--no-psa-admin` to leave out the PSA administrative adjustment that took effect
-Dec 1, 2025. The City's quoted typical bill predates it.
-
-Monte Carlo, upgrade exposure and tornado:
-
-```
-dcop mc [--scenario base] [--draws 2000] [--workers 4]
-```
-
-This samples gas basis, upgrade costs, interconnection and permit slip, and plant
-outage rates from `config/distributions.yaml`. It writes P10/P50/P90 of the levelized
-cost and first-power date, the share of draws where grid is cheaper, upgrade exposure
-P50/P90, the unconfirmed upgrade items, and a one-at-a-time tornado chart. 2,000 draws
-take about 25 seconds on four workers. Henry Hub is covered by the tornado, not sampled.
-
-`dcop run` writes `summary`, `ledger` and `components` parquet files plus a
-stack chart and a timing chart per scenario to `outputs/`.
-
-Every input under `config/` and `data/processed/` is a placeholder, not real
-data: the site, tariff, plant, gas supply and curves, upgrade items, and the
-value of unserved energy. Results show that the model works, not what a real
-site would cost.
+Real dollars in the base year, real WACC, annual steps, all rates as fractions, every
+output row carrying `site_id`, `path_id` and `scenario_id`. Details are in spec section 2.

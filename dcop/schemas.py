@@ -32,7 +32,7 @@ class Sourced(_Model):
 # --------------------------------------------------------------------------
 # Global config
 # --------------------------------------------------------------------------
-class GlobalConfig(_Model):
+class GlobalConfig(Sourced):
     base_year: int = 2026
     discount_rate: float = Field(0.08, ge=0, lt=1)
     horizon_years: int = Field(15, ge=1)
@@ -382,7 +382,7 @@ class SensitivitySpec(_Model):
     high: float
 
 
-class Distributions(_Model):
+class Distributions(Sourced):
     n_draws: int = Field(2000, ge=1)
     seed: int = 0
     basis: BasisDist | None = None
@@ -391,6 +391,36 @@ class Distributions(_Model):
     permit_slip_months: DiscreteDist | None = None  # added to the BTM permit lead time
     efor: EforDist | None = None
     sensitivities: list[SensitivitySpec] = Field(default_factory=list)
+
+
+# --------------------------------------------------------------------------
+# 11 Assumptions register and data-file sources (config/assumptions.yaml, data/sources.yaml)
+# --------------------------------------------------------------------------
+class AssumptionEntry(_Model):
+    """One row of the spec's assumptions register.
+
+    ``path`` is an override-style path to the value, and may use ``{site}``, ``{tariff}``,
+    ``{hub}`` and ``{plant}`` to expand once per site. A structural assumption, one that is
+    built into the model rather than an input, has no path.
+    """
+
+    id: str
+    name: str
+    path: str | None = None
+    kind: Literal["input", "structural"] = "input"
+    description: str = ""  # for structural entries: what the model does
+    source: str | None = None
+    as_of: date | None = None
+    owner: str = "TBD"
+    confidence: Literal["low", "medium", "high"] | None = None
+
+
+class DataSource(_Model):
+    """Provenance of a data file referenced by a ``*_ref`` field."""
+
+    path: str  # relative to the data directory, as written in the ref
+    source: str | None = None
+    as_of: date | None = None
 
 
 # --------------------------------------------------------------------------

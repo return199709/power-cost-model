@@ -1,4 +1,6 @@
 # Monte Carlo distributions and tornado ranges (spec §7). Every value is a PLACEHOLDER.
+source: "PLACEHOLDER: ranges chosen for illustration, not fitted to data"
+as_of: 2026-10-26
 n_draws: 2000
 seed: 20261026
 

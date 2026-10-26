@@ -1,4 +1,7 @@
 # Global model settings. All *_pct values are fractions (0.08 = 8%).
+# Individual values are sourced in config/assumptions.yaml.
+source: "Model defaults from DCOP_MODEL_SPEC.md section 2; see config/assumptions.yaml for each value"
+as_of: 2026-10-26
 base_year: 2026            # real-dollar year (spec §2)
 discount_rate: 0.08        # real WACC (assumption A1, unconfirmed)
 horizon_years: 15          # annual steps (spec §2, open question 5)

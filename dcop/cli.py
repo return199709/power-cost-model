@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from datetime import date
 from pathlib import Path
 
 import pandas as pd
@@ -12,6 +13,30 @@ from dcop.reports import levelized_components, stack_chart, timing_chart, valida
 from dcop.scenarios import run_all
 
 
+def _audit_args(p: argparse.ArgumentParser) -> None:
+    p.add_argument("--strict", action="store_true",
+                   help="exit with status 2 if any input is a placeholder, stale, untagged or broken")
+    p.add_argument("--today", type=date.fromisoformat, help="run date for staleness checks (default today)")
+
+
+def _write_audit(args: argparse.Namespace, inputs, scenario_ids: list[str], *, result=None, dist=None) -> int:
+    from dcop.assumptions import build_audit, render_markdown
+
+    audit = build_audit(inputs, scenario_ids, today=args.today, config_dir=args.config_dir, dist=dist, result=result)
+    path = args.out / "assumptions.md"
+    args.out.mkdir(parents=True, exist_ok=True)
+    path.write_text(render_markdown(audit), encoding="utf-8")
+    c = audit.counts()
+    print(f"\nassumptions: {c['items']} items checked, {c['placeholder']} placeholder, {c['stale']} stale, "
+          f"{c['no source'] + c['no as_of']} untagged, {c['unresolved'] + c['missing file']} broken -> {path}")
+    problems = audit.strict_problems()
+    if args.strict and problems:
+        for where, flags in problems:
+            print(f"  strict: {where}: {', '.join(flags)}")
+        return 2
+    return 0
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(prog="dcop", description="Delivered Cost of Power model")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -19,6 +44,12 @@ def main(argv: list[str] | None = None) -> int:
     run.add_argument("--scenario", action="append", help="scenario id (repeatable); default all")
     run.add_argument("--config-dir", default="config", type=Path)
     run.add_argument("--out", default="outputs", type=Path)
+    _audit_args(run)
+    audit = sub.add_parser("audit", help="write assumptions.md: every input, its source, and flags")
+    audit.add_argument("--scenario", action="append", help="scenario id (repeatable); default all")
+    audit.add_argument("--config-dir", default="config", type=Path)
+    audit.add_argument("--out", default="outputs", type=Path)
+    _audit_args(audit)
     mc = sub.add_parser("mc", help="Monte Carlo P-values, upgrade exposure and tornado")
     mc.add_argument("--scenario", default="base")
     mc.add_argument("--draws", type=int, help="number of draws (default from distributions.yaml)")
@@ -26,6 +57,7 @@ def main(argv: list[str] | None = None) -> int:
     mc.add_argument("--workers", type=int, help="processes (default up to 4)")
     mc.add_argument("--config-dir", default="config", type=Path)
     mc.add_argument("--out", default="outputs", type=Path)
+    _audit_args(mc)
     bill = sub.add_parser("bill", help="itemized Austin Energy FY2026 bill for one month")
     bill.add_argument("customer", choices=["residential", "commercial", "large"])
     bill.add_argument("--voltage", choices=["primary", "transmission"], help="large customers")
@@ -40,6 +72,10 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "mc":
         return _run_mc(args)
+
+    if args.command == "audit":
+        inputs = load_inputs(args.config_dir)
+        return _write_audit(args, inputs, args.scenario or list(inputs.scenarios))
 
     if args.command == "bill":
         from dcop.grid.austin import commercial_statement, large_load_statement, residential_statement
@@ -87,7 +123,7 @@ def main(argv: list[str] | None = None) -> int:
                                        values="usd_per_mwh", sort=False)
         print(table.to_string())
     print(f"\nwrote summary, ledger and components parquet files and charts to {args.out}/")
-    return 0
+    return _write_audit(args, inputs, list(result.inputs_by_scenario), result=result)
 
 
 def _run_mc(args: argparse.Namespace) -> int:
@@ -129,4 +165,6 @@ def _run_mc(args: argparse.Namespace) -> int:
         top = sens[sens["swing"] > 1e-9].sort_values("swing", ascending=False).groupby(["site_id", "path_id"]).head(6)
         print(top[["site_id", "path_id", "label", "range", "ldcop_low", "ldcop_base", "ldcop_high"]].to_string(index=False))
     print(f"\nwrote Monte Carlo, exposure and tornado outputs to {args.out}/")
-    return 0
+    from dcop.scenarios import run_all
+
+    return _write_audit(args, inputs, [args.scenario], result=run_all(inputs, [args.scenario]), dist=dist)

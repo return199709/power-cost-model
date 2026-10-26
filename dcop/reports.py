@@ -117,6 +117,23 @@ def levelized_components(result: RunResult) -> pd.DataFrame:
     return pd.DataFrame(rows, columns=[*ID_KEYS, "group", "usd_per_mwh"])
 
 
+def levelized_categories(result: RunResult) -> pd.DataFrame:
+    """Levelized $/MWh by ledger category: NPV(category cost) / NPV(delivered MWh).
+
+    Same arithmetic as ``levelized_components`` but before grouping for the chart.
+    """
+    df = result.ledger.to_frame()
+    rows = []
+    for key, g in df.groupby(ID_KEYS):
+        cfg = result.inputs_by_scenario[key[2]].global_cfg
+        mwh = g.drop_duplicates("year").set_index("year")["mwh_delivered"].to_dict()
+        denom = npv(mwh, cfg.discount_rate, cfg.base_year)
+        for category, sub in g.groupby("category"):
+            usd = npv(sub.groupby("year")["usd_real"].sum().to_dict(), cfg.discount_rate, cfg.base_year)
+            rows.append((*key, category, usd / denom))
+    return pd.DataFrame(rows, columns=[*ID_KEYS, "category", "usd_per_mwh"])
+
+
 def check_components(summary: pd.DataFrame, components: pd.DataFrame, tol: float = 1e-6) -> None:
     """Levelized components must add up to each LDCoP (milestone M1 acceptance)."""
     total = components.groupby(ID_KEYS)["usd_per_mwh"].sum()

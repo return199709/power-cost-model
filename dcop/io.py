@@ -14,7 +14,7 @@ from typing import Any
 import yaml
 
 from dcop.finance import to_real
-from dcop.schemas import Distributions, GasSupply, GlobalConfig, PlantConfig, Scenario, Site, Tariff, UpgradeExposure
+from dcop.schemas import AssumptionEntry, DataSource, Distributions, GasSupply, GlobalConfig, PlantConfig, Scenario, Site, Tariff, UpgradeExposure
 
 
 def kw_to_mw(kw: float) -> float:
@@ -51,6 +51,8 @@ class Inputs:
     plants: dict[str, PlantConfig] = field(default_factory=dict)
     gas: dict[str, GasSupply] = field(default_factory=dict)  # keyed by hub
     upgrades: dict[str, UpgradeExposure] = field(default_factory=dict)  # keyed by site_id
+    assumptions: list[AssumptionEntry] = field(default_factory=list)  # the spec's section 11 register
+    data_sources: dict[str, DataSource] = field(default_factory=dict)  # keyed by ref path
 
 
 def deflate_tariff(raw: dict[str, Any], base_year: int, inflation: float) -> dict[str, Any]:
@@ -141,7 +143,18 @@ def load_inputs(config_dir: Path | str = "config", data_dir: Path | str | None =
     for site_id in upgrades:
         if site_id not in sites:
             raise ValueError(f"upgrades given for unknown site {site_id!r}")
+    assumptions = [AssumptionEntry.model_validate(r) for r in (read_yaml(config_dir / "assumptions.yaml") or [])] \
+        if (config_dir / "assumptions.yaml").exists() else []
+    ids = [a.id for a in assumptions]
+    if len(ids) != len(set(ids)):
+        raise ValueError("duplicate assumption id in assumptions.yaml")
+    data_dir = Path(data_dir) if data_dir else config_dir.parent / "data"
+    sources_file = data_dir / "sources.yaml"
+    data_sources = _by_id([DataSource.model_validate(r) for r in (read_yaml(sources_file) or [])], "path", "data source") \
+        if sources_file.exists() else {}
     return Inputs(
+        assumptions=assumptions,
+        data_sources=data_sources,
         plants=plants,
         gas=gas,
         upgrades=upgrades,
@@ -149,5 +162,5 @@ def load_inputs(config_dir: Path | str = "config", data_dir: Path | str | None =
         sites=sites,
         tariffs=tariffs,
         scenarios=scenarios,
-        data_dir=Path(data_dir) if data_dir else config_dir.parent / "data",
+        data_dir=data_dir,
     )
