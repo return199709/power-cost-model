@@ -155,7 +155,7 @@ def evaluate_draw(eff0: Inputs, overrides: dict[str, Any], cache: RunCache) -> l
         eff = apply_overrides(eff0, overrides)
     except ValueError:
         return [_failed_row(s.site_id, p) for s in eff0.sites.values()
-                for p, present in (("grid", s.grid_paths), ("btm", s.btm_configs)) if present]
+                for p, present in (("grid", s.grid_paths), ("btm", s.btm_configs), ("hybrid", s.hybrid)) if present]
     errors: list[tuple[str, str, ValueError]] = []
     rows = [path_metrics(run, eff) for run in run_inputs(eff, "mc", cache, errors)]
     return rows + [_failed_row(site_id, path_id) for site_id, path_id, _ in errors]
@@ -258,12 +258,19 @@ def _summarize(frame: pd.DataFrame, base: pd.DataFrame, eff0: Inputs, scenario_i
             "availability_p50": float(g["availability"].quantile(0.5)),
         })
     out = pd.DataFrame(rows)
-    out["p_grid_cheaper"] = np.nan
+    out["p_grid_cheaper"] = np.nan  # grid below BTM, over paired draws
+    out["p_lowest_cost"] = np.nan  # this path is the cheapest of the site's paths
     for site_id in out["site_id"].unique():
         pivot = frame[frame["site_id"] == site_id].pivot(index="draw", columns="path_id", values="ldcop_usd_mwh")
+        rows_ = out["site_id"] == site_id
         if {"grid", "btm"} <= set(pivot.columns):
-            both = pivot.dropna()
-            out.loc[out["site_id"] == site_id, "p_grid_cheaper"] = float((both["grid"] < both["btm"]).mean())
+            both = pivot[["grid", "btm"]].dropna()
+            out.loc[rows_, "p_grid_cheaper"] = float((both["grid"] < both["btm"]).mean())
+        if pivot.shape[1] >= 2:
+            complete = pivot.dropna()
+            best = complete.idxmin(axis=1)
+            for path_id in pivot.columns:
+                out.loc[rows_ & (out["path_id"] == path_id), "p_lowest_cost"] = float((best == path_id).mean())
     return out
 
 

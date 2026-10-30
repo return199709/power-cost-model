@@ -80,18 +80,30 @@ def plant_ledger_lines(
     mwh_generated_by_year: dict[int, float],
     fuel_mmbtu_by_year: dict[int, float],
     lateral_principal_usd: float = 0.0,
+    handover: pd.Timestamp | None = None,
+    fixed_om_after_pct: float = 1.0,
+    capital_end: pd.Timestamp | None = None,
+    sale_at_handover_pct: float = 0.0,
 ) -> list[LedgerLine]:
+    """Capital recovery, fixed and variable O&M, carbon, and salvage.
+
+    The hybrid path passes ``handover`` (the grid takes over): fixed O&M continues at
+    ``fixed_om_after_pct`` afterward, ``capital_end`` ends capital recovery, and
+    ``sale_at_handover_pct`` of the capital is recovered as sale proceeds in the handover year.
+    """
     kw = installed_kw(plant)
     lines: list[LedgerLine] = []
     plant_principal = plant.capex_usd_kw * kw
     emissions_principal = plant.emissions_control_capex_usd_kw * kw
     if plant_principal:
-        lines += capex_annuity_lines(factory, "plant_capex", plant_principal, cfg, first_power)
+        lines += capex_annuity_lines(factory, "plant_capex", plant_principal, cfg, first_power, end=capital_end)
     if emissions_principal:
-        lines += capex_annuity_lines(factory, "emissions_controls", emissions_principal, cfg, first_power)
+        lines += capex_annuity_lines(factory, "emissions_controls", emissions_principal, cfg, first_power, end=capital_end)
 
     for year in cfg.ops_years:
         frac = online_fraction(year, first_power)
+        if handover is not None:
+            frac = frac - online_fraction(year, handover) * (1.0 - fixed_om_after_pct)
         if frac > 0 and plant.fixed_om_usd_kw_yr:
             lines.append(factory.line(year, "fixed_om", plant.fixed_om_usd_kw_yr * kw * frac))
         mwh = mwh_generated_by_year.get(year, 0.0)
@@ -104,6 +116,9 @@ def plant_ledger_lines(
             tonnes = fuel_mmbtu_by_year[year] * plant.emission_factor_t_co2_mmbtu
             lines.append(factory.line(year, "carbon", tonnes * plant.co2_price_usd_t, note=f"t_co2={tonnes:.0f}"))
 
+    if sale_at_handover_pct and handover is not None:
+        total = plant_principal + emissions_principal + lateral_principal_usd
+        lines.append(factory.line(handover.year, "residual", -sale_at_handover_pct * total, "sale at handover"))
     if cfg.btm_salvage_pct_capex:
         total = plant_principal + emissions_principal + lateral_principal_usd
         lines.append(factory.line(cfg.ops_years[-1], "residual", -cfg.btm_salvage_pct_capex * total, "salvage"))

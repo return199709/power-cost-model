@@ -30,6 +30,9 @@
 - {id: A14, name: BTM plant configuration for each site, path: "sites.{site}.btm_configs",
    source: "PLACEHOLDER: reciprocating engines at N+2, round numbers not vendor quotes", as_of: 2026-10-26, confidence: low}
 
+- {id: A15, name: Hybrid path settings (gas bridge then grid), path: "sites.{site}.hybrid",
+   source: "PLACEHOLDER: the plant is kept as backup with its fixed O&M, firm gas transport dropped, nothing sold; no one has decided this", as_of: 2026-10-30, confidence: low}
+
 # ---- structural: built into the model, not an input ----
 - {id: S1, name: BTM excess energy has no sale value, kind: structural,
    description: "Spec A5. Generation equals delivered energy and nothing is sold.",
@@ -58,3 +61,6 @@
 - {id: S9, name: Tariff billing simplifications, kind: structural,
    description: "No holiday calendar, hourly input understates the 15-minute peak, billed kW is not rounded, months with no energy are not billed.",
    source: "dcop/grid/tariff.py", as_of: 2026-10-26, confidence: medium}
+- {id: S10, name: Hybrid path stitches the gas and grid runs at the grid energization date, kind: structural,
+   description: "Gas serves load until the grid is energized and the grid serves it after. Unserved energy is priced on the combined delivery. If the grid is energized no later than gas power, no bridge plant is built. Backup gas serves no load after the handover. Austin Energy's Standby Capacity schedule (grid as backup to on-site generation) is not part of this path.",
+   source: "DCOP_MODEL_SPEC.md section 12, open question 1; Austin Energy FY2026 tariff p.15 and p.27", as_of: 2026-10-30, confidence: low}

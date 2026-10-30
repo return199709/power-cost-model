@@ -177,7 +177,7 @@ _RAMP = "#c3c2b7"
 _GRID = "#e6e5e1"
 _SERIES = ["#2a78d6", "#eb6834", "#1baf7a", "#eda100", "#e87ba4", "#008300", "#6250d6", "#e34948"]
 _GROUP_COLOR = dict(zip(CATEGORY_GROUPS, _SERIES))
-_PATH_COLOR = {"grid": _SERIES[0], "btm": _SERIES[1]}
+_PATH_COLOR = {"grid": _SERIES[0], "btm": _SERIES[1], "hybrid": _SERIES[2]}
 _DPI = 100
 
 
@@ -204,7 +204,7 @@ def stack_chart(result: RunResult, scenario_id: str, path: Path) -> None:
     if comp.empty:
         raise ValueError(f"no results for scenario {scenario_id!r}")
     sites = list(dict.fromkeys(comp["site_id"]))
-    bars = [(s, p) for s in sites for p in ("grid", "btm") if ((comp.site_id == s) & (comp.path_id == p)).any()]
+    bars = [(s, p) for s in sites for p in ("grid", "btm", "hybrid") if ((comp.site_id == s) & (comp.path_id == p)).any()]
     xs, gap = [], 0.0
     for i, (s, _) in enumerate(bars):
         if i and bars[i - 1][0] != s:
@@ -277,11 +277,13 @@ def timing_chart(result: RunResult, scenario_id: str, path: Path) -> None:
         site = result.inputs_by_scenario[scenario_id].sites[site_id]
         quarters = runs[0].timing.mw_online.index
         # the ramp is a wide pale band underneath so a path that tracks it stays visible
-        ax.step(quarters, ramp_mw(site, quarters), where="post", color=_RAMP, linewidth=7, zorder=1)
-        for run in (r for r in runs if r.site_id == site_id):
+        ax.step(quarters, ramp_mw(site, quarters), where="post", color=_RAMP, linewidth=11, zorder=1)
+        # paths often coincide, so draw them as nested stripes: widest at the bottom, narrowest on top
+        stripe = {"hybrid": 7.0, "btm": 4.5, "grid": 2.0}
+        for run in sorted((r for r in runs if r.site_id == site_id), key=lambda r: -stripe[r.path_id]):
             online = run.timing.mw_online
             ax.step(online.index, online.to_numpy(), where="post", color=_PATH_COLOR[run.path_id],
-                    linewidth=2, zorder=2)
+                    linewidth=stripe[run.path_id], zorder=2 + (8 - stripe[run.path_id]) / 10)
         ax.set_ylabel(f"{site_id}\nMW online", fontsize=9, color=_INK_2)
         ax.set_ylim(0, site.load_mw_peak * 1.1)
     # zoom to the ramp period: from the first quarter to two years past the last ramp or power event
@@ -294,14 +296,15 @@ def timing_chart(result: RunResult, scenario_id: str, path: Path) -> None:
     axes[-1, 0].set_xlim(quarters[0], max(events) + pd.DateOffset(years=2))
     axes[-1, 0].xaxis.set_major_locator(mdates.YearLocator())
     axes[-1, 0].xaxis.set_major_formatter(mdates.DateFormatter("%Y"))
-    handles = [Line2D([], [], color=_PATH_COLOR["grid"], linewidth=2, label="Grid online"),
-               Line2D([], [], color=_PATH_COLOR["btm"], linewidth=2, label="BTM online"),
-               Line2D([], [], color=_RAMP, linewidth=7, label="Load ramp")]
+    names = {"grid": "Grid online", "btm": "BTM online", "hybrid": "Hybrid online"}
+    present = [p for p in ("grid", "btm", "hybrid") if any(r.path_id == p for r in runs)]
+    handles = [Line2D([], [], color=_PATH_COLOR[p], linewidth=4, label=names[p]) for p in present]
+    handles.append(Line2D([], [], color=_RAMP, linewidth=9, label="Load ramp"))
     top = 1.0 - 0.9 / fig.get_figheight()
     fig.text(0.10, top + 0.045, "MW online by quarter", fontsize=12, color=_INK, fontweight="bold", ha="left")
     fig.text(0.10, top - 0.005, f"Scenario: {scenario_id}. Online = lesser of the load ramp and the path's capacity.",
              fontsize=9, color=_INK_2, ha="left")
-    leg = fig.legend(handles=handles, loc="lower center", ncol=3, frameon=False, fontsize=9)
+    leg = fig.legend(handles=handles, loc="lower center", ncol=len(handles), frameon=False, fontsize=9)
     for text in leg.get_texts():
         text.set_color(_INK_2)
     fig.subplots_adjust(left=0.10, right=0.96, top=top - 0.05, bottom=0.14 + 0.1 / len(sites), hspace=0.25)
@@ -343,7 +346,7 @@ def tornado_chart(table: pd.DataFrame, site_id: str, path: Path, top: int = 12) 
     from matplotlib.patches import Patch
 
     site = table[(table["site_id"] == site_id) & (table["swing"] > 1e-9)]
-    paths = [p for p in ("grid", "btm") if (site["path_id"] == p).any()]
+    paths = [p for p in ("grid", "btm", "hybrid") if (site["path_id"] == p).any()]
     if not paths:
         raise ValueError(f"no sensitivities with an effect for site {site_id!r}")
     rows = max(min(top, (site["path_id"] == p).sum()) for p in paths)

@@ -93,6 +93,19 @@ COST_LINE_INPUTS: dict[str, dict[str, list[str]]] = {
 }
 
 
+def _merge_traces() -> dict[str, list[str]]:
+    """The hybrid's cost lines draw on both paths' inputs, plus its own settings."""
+    merged: dict[str, list[str]] = {}
+    for path in ("grid", "btm"):
+        for category, templates in COST_LINE_INPUTS[path].items():
+            merged.setdefault(category, [])
+            merged[category] += [t for t in templates if t not in merged[category]]
+    return {c: [*t, "sites.{site}.hybrid"] for c, t in merged.items()}
+
+
+COST_LINE_INPUTS["hybrid"] = _merge_traces()
+
+
 def site_names(site: Site) -> dict[str, str]:
     names = {"site": site.site_id}
     if site.grid_paths:

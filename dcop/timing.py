@@ -78,6 +78,24 @@ def build_timing(
     )
 
 
+def combine_timings(
+    path_id: str, first: PathTiming, then: PathTiming, handover: pd.Timestamp, site: Site
+) -> PathTiming:
+    """MW online when ``first`` serves until ``handover`` and ``then`` serves afterward."""
+    quarters = first.mw_online.index
+    online = np.where(np.asarray(quarters < handover), first.mw_online.to_numpy(), then.mw_online.to_numpy())
+    full_mw = max(mw for _, mw in site.load_mw_ramp)
+    reached = np.flatnonzero(online >= full_mw - 1e-9)
+    return PathTiming(
+        path_id=path_id,
+        lead_months=first.lead_months,
+        first_power_date=first.first_power_date,
+        capacity_mw=max(first.capacity_mw, then.capacity_mw),
+        mw_online=pd.Series(online, index=quarters, name=f"{path_id}_mw_online"),
+        full_power_date=quarters[reached[0]] if len(reached) else pd.NaT,
+    )
+
+
 def capacity_mw_series(index: pd.DatetimeIndex, first_power: pd.Timestamp, capacity_mw: float) -> np.ndarray:
     """Path capacity at each timestamp: zero before first power, then ``capacity_mw``."""
     return np.where(np.asarray(index >= first_power), capacity_mw, 0.0)

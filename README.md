@@ -7,13 +7,14 @@ load in $/MWh, for a grid path and a behind-the-meter (BTM) gas path. Design:
 
 ## Status
 
-All five milestones in the spec are built. The inputs are not real yet.
+All five milestones in the spec are built, and so is the hybrid path from the spec's open
+questions. The inputs are not real yet.
 
 | Milestone | State |
 |---|---|
 | M0 schemas, loaders, finance, ledger, grid path | built |
 | M1 BTM path, timing engine, stack chart | built |
-| M2 all sites, both paths, deterministic scenarios | runner and the seven spec scenarios built; one placeholder site |
+| M2 all sites, all paths, deterministic scenarios | runner and the seven spec scenarios built; one placeholder site |
 | M3 upgrade exposure, Monte Carlo, tornado | built |
 | M4 assumptions dump, staleness flags, docs | built |
 
@@ -25,6 +26,18 @@ commercial and large-load bills are worked by hand from the tariff.
 **Placeholders:** the site, load profile, plant, gas supply and curves, upgrade items,
 value of unserved energy, discount rate, and every Monte Carlo and tornado range. Results
 show the model works, not what a real site would cost. `dcop audit` lists every one.
+
+## Paths
+
+Every site gets a **grid** path and a **BTM** (gas on site) path from its `grid_paths` and
+`btm_configs`. A site with a `hybrid` setting also gets a **hybrid** path: gas serves the load
+until the grid is energized, then the grid serves it and the gas plant stays as backup. The
+setting says how much backup gas transport and fixed O&M continue, and what share of the
+plant's capex is recovered by selling it at the handover. Capital recovery is sized to match
+the outlay's present value, so only keeping versus selling the plant moves the cost, not
+the payment schedule. If the grid is energized no later than gas could be, no bridge plant is
+built. The Austin Energy high-load-factor contract is exclusive except for on-site backup
+generation, which is why the hybrid is the form that fits it.
 
 ## Run
 

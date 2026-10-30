@@ -64,8 +64,9 @@ def capex_annuity_lines(
     first_year: int | pd.Timestamp,
     subcategory: str | None = None,
     note: str | None = None,
+    end: pd.Timestamp | None = None,
 ) -> list[LedgerLine]:
-    """Capital recovery from the in-service date to the end of the horizon.
+    """Capital recovery from the in-service date to the end of the horizon, or to ``end``.
 
     ``first_year`` is a year (in service on Jan 1) or an exact date. Payments are level,
     except that the first year is prorated to the part of it after the in-service date.
@@ -80,6 +81,10 @@ def capex_annuity_lines(
         raise ValueError(f"{category}: in service in {start.year}, after the horizon ends ({last_year})")
     r = cfg.discount_rate
     weights = {y: online_fraction(y, start) for y in range(start.year, last_year + 1)}
+    if end is not None:  # recovered by ``end``: a year's weight is its share between start and end
+        if end <= start:
+            raise ValueError(f"{category}: recovery end {end.date()} is not after in-service {start.date()}")
+        weights = {y: w - online_fraction(y, end) for y, w in weights.items() if y <= end.year}
     year_start = pd.Timestamp(year=start.year, month=1, day=1)
     days_in_year = 366 if year_start.is_leap_year else 365
     t0 = (start.year - (cfg.base_year + 1)) + (start.normalize() - year_start).days / days_in_year

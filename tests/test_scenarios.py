@@ -24,7 +24,7 @@ def pick(summary, path, scenario="base"):
 def test_base_run_reconciles_and_is_within_bounds(inputs):
     result = run_all(inputs, ["base"])
     summary = validated_summary(result)  # reconciles ledger, components, and bounds
-    assert set(summary.path_id) == {"grid", "btm"}
+    assert set(summary.path_id) == {"grid", "btm", "hybrid"}
     assert summary.ldcop_usd_mwh.between(20, 250).all()
     reconcile(result.ledger, summary)
 

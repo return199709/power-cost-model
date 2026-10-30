@@ -43,4 +43,6 @@ sensitivities:
   - {label: Power supply adjustment rate, path: "tariffs.{tariff}.riders.name=Power Supply Adjustment.value", mode: relative, low: -0.20, high: 0.30}
   - {label: Discount rate, path: "global.discount_rate", mode: absolute, low: 0.06, high: 0.10}
   - {label: Value of unserved energy, path: "global.value_of_unserved_usd_mwh", mode: relative, low: -0.50, high: 0.50}
+  - {label: Backup gas transport kept after handover, path: "sites.{site}.hybrid.backup_transport_pct", mode: absolute, low: 0.0, high: 1.0}
+  - {label: Backup plant fixed O&M kept after handover, path: "sites.{site}.hybrid.backup_fixed_om_pct", mode: absolute, low: 0.25, high: 1.0}
   - {label: Load factor, path: "sites.{site}.load_factor", mode: delta, low: -0.05, high: 0.05}

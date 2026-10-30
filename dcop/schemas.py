@@ -14,7 +14,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-PathId = Literal["grid", "btm"]
+PathId = Literal["grid", "btm", "hybrid"]
 Days = Literal["all", "weekday", "weekend"]
 
 
@@ -65,6 +65,30 @@ class GlobalConfig(Sourced):
         return self
 
 
+class HybridConfig(_Model):
+    """BTM bridge to grid: gas serves the load until the grid is energized, then the grid
+    serves it and the gas plant stays as backup (spec §12, open question 1).
+
+    Capital recovery is sized so its present value equals the outlay, so the schedule alone
+    does not change the levelized cost. What does: keeping the plant (default, capital is
+    recovered over the horizon) or selling it at the handover (``sale_at_handover_pct``).
+    """
+
+    # Share of the firm gas transport kept after the grid takes over
+    backup_transport_pct: float = Field(0.0, ge=0, le=1)
+    # Share of plant fixed O&M that continues after the handover
+    backup_fixed_om_pct: float = Field(1.0, ge=0, le=1)
+    # Share of the plant, emissions-control and lateral capex recovered by selling them at the
+    # handover. Capital is then recovered only up to the handover.
+    sale_at_handover_pct: float = Field(0.0, ge=0, le=1)
+
+    @model_validator(mode="after")
+    def _sold_plant_is_not_backup(self) -> HybridConfig:
+        if self.sale_at_handover_pct > 0 and (self.backup_fixed_om_pct > 0 or self.backup_transport_pct > 0):
+            raise ValueError("a plant sold at the handover cannot also keep backup O&M or gas transport")
+        return self
+
+
 # --------------------------------------------------------------------------
 # 4.1 Site
 # --------------------------------------------------------------------------
@@ -85,6 +109,7 @@ class Site(Sourced):
     gas_pipeline: str | None = None
     lateral_km: float | None = Field(None, ge=0)
     tariff_docket_open: bool = False  # manual flag: utility has an open large-load tariff docket
+    hybrid: HybridConfig | None = None  # set to add the hybrid path; needs grid_paths and btm_configs
     grid_paths: list[str] = Field(default_factory=list)  # tariff_ids
     btm_configs: list[str] = Field(default_factory=list)  # plant_config_ids
 
@@ -94,6 +119,12 @@ class Site(Sourced):
         if "." in v:
             raise ValueError("ids must not contain '.' (used by scenario override paths)")
         return v
+
+    @model_validator(mode="after")
+    def _check_hybrid(self) -> Site:
+        if self.hybrid is not None and not (self.grid_paths and self.btm_configs and self.gas_hub):
+            raise ValueError("a hybrid path needs grid_paths, btm_configs and gas_hub")
+        return self
 
     @model_validator(mode="after")
     def _check_ramp(self) -> Site:

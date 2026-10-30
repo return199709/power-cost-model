@@ -74,8 +74,18 @@ def gas_ledger_lines(
     index: pd.DatetimeIndex,
     fuel_mmbtu: np.ndarray,
     first_power: pd.Timestamp,
+    end: pd.Timestamp | None = None,
+    ft_after_pct: float = 1.0,
+    capital_end: pd.Timestamp | None = None,
+    backup_mdq_mmbtu_d: float | None = None,
 ) -> list[LedgerLine]:
-    """Fuel by price component, fixed firm transport, and lateral capital recovery."""
+    """Fuel by price component, fixed firm transport, and lateral capital recovery.
+
+    The hybrid path passes ``end``, the handover date. Firm transport is sized to the bridge
+    load until then. Afterward ``ft_after_pct`` of ``backup_mdq_mmbtu_d`` is kept, which is
+    the quantity the plant would burn at full load. ``capital_end`` ends the lateral's
+    capital recovery.
+    """
     years, months = calendar_arrays(index)
     ym = years * 12 + months - 1
     monthly_fuel = pd.Series(np.bincount(ym - ym[0], weights=fuel_mmbtu), index=np.arange(ym[0], ym[-1] + 1))
@@ -93,13 +103,19 @@ def gas_ledger_lines(
     # Contracted MDQ (MMBtu/day) sized to the peak hour of the run
     step_h = float((index[1] - index[0]) / pd.Timedelta(hours=1))
     mdq = float(fuel_mmbtu.max() / step_h * 24.0)
+    backup_mdq = mdq if backup_mdq_mmbtu_d is None else backup_mdq_mmbtu_d
     for year in cfg.ops_years:
-        frac = online_fraction(year, first_power)
-        if frac > 0:
+        before = online_fraction(year, first_power)
+        if end is None:
+            quantity_years = mdq * before  # MMBtu/day x share of the year
+        else:  # bridge quantity until the handover, a share of the full-load quantity afterward
+            after = online_fraction(year, end)
+            quantity_years = mdq * (before - after) + ft_after_pct * backup_mdq * after
+        if quantity_years > 0:
+            note = f"mdq_mmbtu_d={mdq:.0f}" + (f"; backup_mdq_mmbtu_d={backup_mdq:.0f}" if end is not None else "")
             lines.append(
-                factory.line(year, "transport_fixed", gas.transport_firm_usd_mmbtu * mdq * 365 * frac,
-                             note=f"mdq_mmbtu_d={mdq:.0f}")
+                factory.line(year, "transport_fixed", gas.transport_firm_usd_mmbtu * quantity_years * 365, note=note)
             )
     if gas.lateral_capex_usd:
-        lines += capex_annuity_lines(factory, "lateral", gas.lateral_capex_usd, cfg, first_power)
+        lines += capex_annuity_lines(factory, "lateral", gas.lateral_capex_usd, cfg, first_power, end=capital_end)
     return lines

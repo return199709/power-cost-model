@@ -42,7 +42,9 @@ from dcop.timing import (
     PathTiming,
     btm_lead_months,
     build_timing,
+    add_months,
     capacity_mw_series,
+    combine_timings,
     grid_lead_months,
     unserved_lines,
 )
@@ -205,9 +207,17 @@ def _eligibility_notes(tariff: Tariff, delivered_kw: pd.Series) -> tuple[str, ..
             "load factor requirement",)
 
 
-def _run_grid_path(
-    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series, cache: RunCache | None = None
-) -> PathRun:
+def _restamp(lines: list[LedgerLine], path_id: str, mwh_year: dict[int, float]) -> list[LedgerLine]:
+    """Give lines a new path id and the MWh of the combined path (the hybrid stitches two runs)."""
+    return [ln.model_copy(update={"path_id": path_id, "mwh_delivered": float(mwh_year.get(ln.year, 0.0))})
+            for ln in lines]
+
+
+def _grid_core(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series, cache: RunCache | None = None,
+    *, skip_unserved: bool = False,
+) -> tuple[PathRun, np.ndarray, np.ndarray]:
+    """Grid path, returning the run with the served and delivered kW arrays."""
     cfg = eff.global_cfg
     tariff = eff.tariffs[_one(site.grid_paths, site, "tariffs", f"sites.{site.site_id}.grid_paths")]
     exposure = eff.upgrades.get(site.site_id)
@@ -235,19 +245,33 @@ def _run_grid_path(
         lines, notes = cache.grid_bill(key, bill)
     if exposure is not None:
         lines += upgrade_ledger_lines(factory, exposure, cfg)
-    lines += unserved_lines(
-        factory, load_kw, served, delivered, timing.first_power_date, cfg.value_of_unserved_usd_mwh
-    )
+    if not skip_unserved:
+        lines += unserved_lines(
+            factory, load_kw, served, delivered, timing.first_power_date, cfg.value_of_unserved_usd_mwh
+        )
     run = _path_run(site, "grid", scenario_id, lines, timing, load_kw, served, delivered)
-    return replace(run, notes=notes)
+    return replace(run, notes=notes), served, delivered
 
 
-def _run_btm_path(
-    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series
+def _run_grid_path(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series, cache: RunCache | None = None
 ) -> PathRun:
+    return _grid_core(site, eff, scenario_id, load_kw, cache)[0]
+
+
+def _btm_core(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series, *,
+    handover: pd.Timestamp | None = None, skip_unserved: bool = False,
+) -> tuple[PathRun, np.ndarray, np.ndarray]:
+    """BTM path, returning the run with the served and delivered kW arrays.
+
+    With ``handover`` (the hybrid path) the plant stops serving load on that date; the
+    site's hybrid settings decide what keeps costing money afterward.
+    """
     cfg = eff.global_cfg
     plant = eff.plants[_one(site.btm_configs, site, "plants", f"sites.{site.site_id}.btm_configs")]
     gas = eff.gas[site.gas_hub]  # type: ignore[index]  # presence checked at load
+    hybrid = site.hybrid if handover is not None else None
     unit_mw = unit_mw_site(plant, site)
     cap_mw = firm_mw(plant, site)
     timing = build_timing(
@@ -256,29 +280,89 @@ def _run_btm_path(
     first_power = timing.first_power_date
     index = load_kw.index
 
-    cap_kw = capacity_mw_series(index, first_power, cap_mw) * 1000.0
-    served = np.minimum(load_kw.to_numpy(), cap_kw)
-    required = avail.required_units(served / 1000.0, unit_mw)
     table = avail.availability_table(plant.n_units, avail.eaf(plant))
-    delivered = served * table[required]
+    step_h = float((index[1] - index[0]) / pd.Timedelta(hours=1))
+
+    def dispatch(cap_kw: np.ndarray) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+        """Served kW, delivered kW, and fuel in MMBtu per interval for a capacity series."""
+        served = np.minimum(load_kw.to_numpy(), cap_kw)
+        required = avail.required_units(served / 1000.0, unit_mw)
+        delivered = served * table[required]
+        # fuel = delivered MWh x heat rate at the part load the running units see
+        hr = heat_rate_mmbtu_mwh(plant, eff.data_dir, served / 1000.0, required, unit_mw, index, first_power)
+        return served, delivered, delivered / 1000.0 * step_h * hr
+
+    cap_kw = capacity_mw_series(index, first_power, cap_mw) * 1000.0
+    backup_mdq = None
+    if handover is not None:
+        backup_mdq = float(dispatch(cap_kw)[2].max() / step_h * 24.0)  # full-load quantity, for backup transport
+        cap_kw = np.where(np.asarray(index < handover), cap_kw, 0.0)
+    served, delivered, fuel = dispatch(cap_kw)
     delivered_kw = pd.Series(delivered, index=index)
     mwh_year = mwh_by_year(delivered_kw)
     factory = LineFactory(site.site_id, "btm", scenario_id, mwh_year)
-
-    # fuel = delivered MWh x heat rate at the part load the running units see
-    hr = heat_rate_mmbtu_mwh(plant, eff.data_dir, served / 1000.0, required, unit_mw, index, first_power)
-    fuel = delivered / 1000.0 * float((index[1] - index[0]) / pd.Timedelta(hours=1)) * hr
     fuel_year = sum_by_year(fuel, index)
 
-    lines = gas_ledger_lines(factory, gas, cfg, eff.data_dir, index, fuel, first_power)
+    capital_end = handover if hybrid is not None and hybrid.sale_at_handover_pct > 0 else None
+    lines = gas_ledger_lines(
+        factory, gas, cfg, eff.data_dir, index, fuel, first_power,
+        end=handover, ft_after_pct=hybrid.backup_transport_pct if hybrid else 1.0, capital_end=capital_end,
+        backup_mdq_mmbtu_d=backup_mdq,
+    )
     lines += plant_ledger_lines(
         factory, plant, cfg, first_power, mwh_year, fuel_year,
-        lateral_principal_usd=gas.lateral_capex_usd,
+        lateral_principal_usd=gas.lateral_capex_usd, handover=handover,
+        fixed_om_after_pct=hybrid.backup_fixed_om_pct if hybrid else 1.0, capital_end=capital_end,
+        sale_at_handover_pct=hybrid.sale_at_handover_pct if hybrid else 0.0,
     )
+    if not skip_unserved:
+        lines += unserved_lines(
+            factory, load_kw, served, delivered, first_power, cfg.value_of_unserved_usd_mwh
+        )
+    return _path_run(site, "btm", scenario_id, lines, timing, load_kw, served, delivered), served, delivered
+
+
+def _run_btm_path(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series
+) -> PathRun:
+    return _btm_core(site, eff, scenario_id, load_kw)[0]
+
+
+def _run_hybrid_path(
+    site: Site, eff: Inputs, scenario_id: str, load_kw: pd.Series, cache: RunCache | None = None
+) -> PathRun:
+    """Gas serves the load until the grid is energized, then the grid serves it.
+
+    The two runs are stitched at the grid's first-power date. Unserved energy is priced on
+    the combined delivery: load before gas power is delay, and load the plant cannot carry
+    or loses to outages before the handover is priced as in the BTM path. If the grid is
+    energized before gas power could arrive, no bridge plant is built and the result is the
+    grid path under the hybrid name.
+    """
+    cfg = eff.global_cfg
+    grid_run, g_served, g_delivered = _grid_core(site, eff, scenario_id, load_kw, cache, skip_unserved=True)
+    handover = grid_run.timing.first_power_date
+    plant = eff.plants[site.btm_configs[0]]
+    btm_power = add_months(cfg.clock_start_date, btm_lead_months(plant, eff.gas[site.gas_hub]))  # type: ignore[index]
+    if handover <= btm_power:
+        solo = _grid_core(site, eff, scenario_id, load_kw, cache)[0]
+        note = (f"hybrid: the grid is energized {handover:%Y-%m-%d}, no later than BTM power "
+                f"{btm_power:%Y-%m-%d}, so no bridge plant is built")
+        return replace(solo, path_id="hybrid", lines=[ln.model_copy(update={"path_id": "hybrid"}) for ln in solo.lines],
+                       timing=replace(solo.timing, path_id="hybrid"), notes=(*solo.notes, note))
+    btm_run, b_served, b_delivered = _btm_core(site, eff, scenario_id, load_kw, handover=handover, skip_unserved=True)
+
+    served = g_served + b_served  # disjoint in time: the plant stops at the handover, the grid starts there
+    delivered = g_delivered + b_delivered
+    mwh_year = mwh_by_year(pd.Series(delivered, index=load_kw.index))
+    lines = _restamp(grid_run.lines + btm_run.lines, "hybrid", mwh_year)
     lines += unserved_lines(
-        factory, load_kw, served, delivered, first_power, cfg.value_of_unserved_usd_mwh
+        LineFactory(site.site_id, "hybrid", scenario_id, mwh_year), load_kw, served, delivered,
+        btm_run.timing.first_power_date, cfg.value_of_unserved_usd_mwh,
     )
-    return _path_run(site, "btm", scenario_id, lines, timing, load_kw, served, delivered)
+    timing = combine_timings("hybrid", btm_run.timing, grid_run.timing, handover, site)
+    run = _path_run(site, "hybrid", scenario_id, lines, timing, load_kw, served, delivered)
+    return replace(run, notes=grid_run.notes)
 
 
 def _path_run(
@@ -321,6 +405,7 @@ def run_inputs(
         for path_id, present, run_path in (
             ("grid", site.grid_paths, lambda: _run_grid_path(site, eff, scenario_id, load_kw, cache)),
             ("btm", site.btm_configs, lambda: _run_btm_path(site, eff, scenario_id, load_kw)),
+            ("hybrid", site.hybrid, lambda: _run_hybrid_path(site, eff, scenario_id, load_kw, cache)),
         ):
             if not present:
                 continue
@@ -382,7 +467,12 @@ def _sensitivity_overrides(
         except KeyError:
             continue  # this site has no such input
         for path in concrete:
-            base = get_path(tree, path)
+            try:
+                base = get_path(tree, path)
+            except KeyError:
+                continue  # e.g. hybrid settings on a site that has no hybrid path
+            if base is None:
+                continue
             for out, value in ((low, spec.low), (high, spec.high)):
                 v = {"absolute": value, "relative": base * (1 + value), "delta": base + value}[spec.mode]
                 out[path] = round(v) if isinstance(base, int) and not isinstance(base, bool) else v

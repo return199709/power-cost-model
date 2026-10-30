@@ -18,5 +18,9 @@
   lateral_km: 12
   grid_paths: [AE-TRANS-HLF-GE20MW]   # transmission voltage, high load factor contract (PLACEHOLDER choice)
   btm_configs: [RECIP-N2]
+  hybrid:   # PLACEHOLDER: gas bridge until the grid is energized, then kept as backup
+    backup_transport_pct: 0.0
+    backup_fixed_om_pct: 1.0
+    sale_at_handover_pct: 0.0
   source: placeholder, not real site data
   as_of: 2026-10-21

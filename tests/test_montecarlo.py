@@ -203,7 +203,7 @@ def test_mc_percentiles_are_ordered_and_delays_only_slip_later(mc):
 def test_p_grid_cheaper_is_the_share_of_paired_draws(mc):
     pivot = mc.draws.pivot(index="draw", columns="path_id", values="ldcop_usd_mwh")
     expected = float((pivot["grid"] < pivot["btm"]).mean())
-    assert mc.summary["p_grid_cheaper"].tolist() == pytest.approx([expected, expected])
+    assert mc.summary["p_grid_cheaper"].tolist() == pytest.approx([expected] * 3)  # one row per path
     assert 0.0 <= expected <= 1.0
 
 
