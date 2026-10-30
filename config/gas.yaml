@@ -1,0 +1,13 @@
+# PLACEHOLDER gas supply, keyed by hub. Curves are flat synthetic files.
+- hub: PLACEHOLDER-HUB
+  henry_hub_curve_ref: processed/henry_hub_placeholder.csv
+  basis_curve_ref: processed/basis_placeholder.csv
+  basis_volatility: 0.5            # unused until Monte Carlo (M3)
+  transport_firm_usd_mmbtu: 0.30   # FT reservation, $/MMBtu of MDQ per day
+  transport_commodity_usd_mmbtu: 0.25
+  fuel_retention_pct: 0.02
+  lateral_capex_usd: 15000000
+  lateral_lead_months: 18
+  interruptible_risk_days_yr: 0    # unused in v0
+  source: placeholder
+  as_of: 2026-10-21

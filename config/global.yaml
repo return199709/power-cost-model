@@ -1,0 +1,15 @@
+# Global model settings. All *_pct values are fractions (0.08 = 8%).
+# Individual values are sourced in config/assumptions.yaml.
+source: "Model defaults from DCOP_MODEL_SPEC.md section 2; see config/assumptions.yaml for each value"
+as_of: 2026-10-26
+base_year: 2026            # real-dollar year (spec §2)
+discount_rate: 0.08        # real WACC (assumption A1, unconfirmed)
+horizon_years: 15          # annual steps (spec §2, open question 5)
+clock_start: 2027-01-01    # PLACEHOLDER: lead times run from this date
+ops_start_year: 2029       # first year of the horizon window; defaults to base_year + 1
+inflation_pct: 0.025       # PLACEHOLDER: used only to deflate nominal inputs
+value_of_unserved_usd_mwh: 150   # PLACEHOLDER for assumption A2, owner to set
+btm_salvage_pct_capex: 0.0       # residual value at horizon end (spec §5.3 default 0)
+allow_out_of_range: false  # spec §9 sanity bounds
+ldcop_bounds_usd_mwh: [20, 250]
+stale_days: 365            # M4: flag inputs older than this

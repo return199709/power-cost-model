@@ -1,0 +1,16 @@
+# Provenance of every data file the model reads. Paths are relative to this directory.
+- path: processed/henry_hub_placeholder.csv
+  source: "PLACEHOLDER: flat 3.50 real $/MMBtu, not a market forward curve"
+  as_of: 2026-10-21
+- path: processed/henry_hub_high_placeholder.csv
+  source: "PLACEHOLDER: flat 5.50 real $/MMBtu for the high_gas scenario"
+  as_of: 2026-10-21
+- path: processed/henry_hub_low_placeholder.csv
+  source: "PLACEHOLDER: flat 2.50 real $/MMBtu for the low_gas scenario"
+  as_of: 2026-10-21
+- path: processed/basis_placeholder.csv
+  source: "PLACEHOLDER: flat -0.30 $/MMBtu, not a real basis curve"
+  as_of: 2026-10-21
+- path: processed/part_load_placeholder.csv
+  source: "PLACEHOLDER: round numbers for a reciprocating engine, not a vendor curve"
+  as_of: 2026-10-21

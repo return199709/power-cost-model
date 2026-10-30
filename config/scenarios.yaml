@@ -1,0 +1,32 @@
+# Dotted-path overrides: global.<field>, sites.<id>.<field>, tariffs.<id>.<field>,
+# plants.<id>.<field>, gas.<hub>.<field>, upgrades.<site_id>.<field>.
+# List elements are addressed by index, e.g. upgrades.SITE-A.items.0.lead_time_months.
+# All override values below are PLACEHOLDERS.
+- scenario_id: base
+  description: Base case, no overrides
+  overrides: {}
+- scenario_id: high_gas
+  description: Henry Hub at 5.50 real $/MMBtu (flat placeholder curve)
+  overrides:
+    gas.PLACEHOLDER-HUB.henry_hub_curve_ref: processed/henry_hub_high_placeholder.csv
+- scenario_id: low_gas
+  description: Henry Hub at 2.50 real $/MMBtu (flat placeholder curve)
+  overrides:
+    gas.PLACEHOLDER-HUB.henry_hub_curve_ref: processed/henry_hub_low_placeholder.csv
+- scenario_id: upgrade_p90
+  description: Upgrade items billed at their P90 cost (values copied from upgrades.yaml)
+  overrides:
+    upgrades.SITE-A.items.0.cost_usd_p50: 60000000
+    upgrades.SITE-A.items.1.cost_usd_p50: 25000000
+- scenario_id: tariff_redesign
+  description: PLACEHOLDER 2%/yr real tariff growth after a large-load redesign
+  overrides:
+    tariffs.AE-TRANS-HLF-GE20MW.escalation_real_pct: 0.02
+- scenario_id: delayed_interconnect
+  description: Critical-path substation slips 12 months (30 to 42)
+  overrides:
+    upgrades.SITE-A.items.0.lead_time_months: 42
+- scenario_id: btm_permit_slip
+  description: BTM air permit takes 9 more months (9 to 18)
+  overrides:
+    plants.RECIP-N2.permit_lead_months: 18

@@ -1,0 +1,66 @@
+# Assumptions register (spec section 11). Each row points at the value it describes.
+# A source that starts with PLACEHOLDER or says synthetic is flagged in the audit.
+# Owner and confidence are for you to fill in; TBD owners are flagged.
+
+# ---- inputs ----
+- {id: A1, name: Real discount rate, path: global.discount_rate,
+   source: "PLACEHOLDER: spec default of 8% real WACC, not confirmed by finance", as_of: 2026-10-26, confidence: low}
+- {id: A2, name: Value of unserved energy ($/MWh), path: global.value_of_unserved_usd_mwh,
+   source: "PLACEHOLDER: set to 150 so delay and outage costs are not zero; needs an owner", as_of: 2026-10-26, confidence: low}
+- {id: A3, name: Load factor of the site, path: "sites.{site}.load_factor",
+   source: "PLACEHOLDER: synthetic annual shape that peaks once a year, used because no load profile was supplied", as_of: 2026-10-26, confidence: low}
+- {id: A4, name: Gas pricing hub per site, path: "sites.{site}.gas_hub",
+   source: "PLACEHOLDER: hub name is made up; curves are flat synthetic files", as_of: 2026-10-26, confidence: low}
+- {id: A6, name: Carbon price ($/t CO2), path: "plants.{plant}.co2_price_usd_t",
+   source: "Spec section 11: none in the base case", as_of: 2026-10-26, confidence: medium}
+- {id: A7, name: Inflation used to deflate nominal inputs, path: global.inflation_pct,
+   source: "PLACEHOLDER: 2.5% assumed; only applies to inputs tagged with a dollar_year other than the base year", as_of: 2026-10-26, confidence: low}
+- {id: A8, name: Project clock start (lead times run from here), path: global.clock_start,
+   source: "PLACEHOLDER: Jan 1, 2027, the earliest date a decision could plausibly be made", as_of: 2026-10-26, confidence: low}
+- {id: A9, name: Grid tariff chosen for each site, path: "sites.{site}.grid_paths",
+   source: "PLACEHOLDER: Austin Energy high-load-factor transmission schedule assumed; needs the real voltage and contract", as_of: 2026-10-26, confidence: low}
+- {id: A10, name: Planning horizon (years), path: global.horizon_years,
+   source: "Spec section 2 default of 15; open question 5 asks whether 20 is better", as_of: 2026-10-26, confidence: medium}
+- {id: A11, name: Real growth of tariff rates, path: "tariffs.{tariff}.escalation_real_pct",
+   source: "PLACEHOLDER: zero real growth; the Power Supply Adjustment is a pass-through of power costs", as_of: 2026-10-26, confidence: low}
+- {id: A12, name: Basis of the network upgrade estimate, path: "upgrades.{site}.study_source",
+   source: "PLACEHOLDER: analog, no interconnection study supplied", as_of: 2026-10-26, confidence: low}
+- {id: A13, name: Load ramp (cumulative MW by period), path: "sites.{site}.load_mw_ramp",
+   source: "PLACEHOLDER: 25, 50 and 100 MW steps chosen for illustration", as_of: 2026-10-26, confidence: low}
+- {id: A14, name: BTM plant configuration for each site, path: "sites.{site}.btm_configs",
+   source: "PLACEHOLDER: reciprocating engines at N+2, round numbers not vendor quotes", as_of: 2026-10-26, confidence: low}
+
+- {id: A15, name: Hybrid path settings (gas bridge then grid), path: "sites.{site}.hybrid",
+   source: "PLACEHOLDER: the plant is kept as backup with its fixed O&M, firm gas transport dropped, nothing sold; no one has decided this", as_of: 2026-10-30, confidence: low}
+
+# ---- structural: built into the model, not an input ----
+- {id: S1, name: BTM excess energy has no sale value, kind: structural,
+   description: "Spec A5. Generation equals delivered energy and nothing is sold.",
+   source: "DCOP_MODEL_SPEC.md section 11, A5", as_of: 2026-10-26, confidence: medium}
+- {id: S2, name: Generating units fail independently, kind: structural,
+   description: "Availability is binomial with no common-mode gas interruption; interruptible_risk_days_yr is unused.",
+   source: "DCOP_MODEL_SPEC.md section 5.3 (v0)", as_of: 2026-10-26, confidence: medium}
+- {id: S3, name: BTM permit and construction run in sequence, kind: structural,
+   description: "First power is clock start plus the larger of (permit + construction) and the gas lateral lead time. The spec says max of lead times; permit cannot overlap construction.",
+   source: "Modeling choice, dcop/timing.py", as_of: 2026-10-26, confidence: medium}
+- {id: S4, name: Capital recovery from the in-service date to the horizon end, kind: structural,
+   description: "Level payments, first year prorated, present value equal to the outlay discounted from the in-service date. No construction-period financing. Salvage defaults to zero.",
+   source: "Modeling choice, dcop/ledger.py", as_of: 2026-10-26, confidence: medium}
+- {id: S5, name: Plant derates and heat rate, kind: structural,
+   description: "Capacity derated at the design ambient temperature in every hour. Part-load heat rate from a curve. No ambient heat-rate adjustment. Linear degradation.",
+   source: "Modeling choice, dcop/btm/plant.py", as_of: 2026-10-26, confidence: medium}
+- {id: S6, name: Grid availability is 100% once energized, kind: structural,
+   description: "No grid outages or curtailment are modeled after the energization date.",
+   source: "Modeling choice, dcop/scenarios.py", as_of: 2026-10-26, confidence: medium}
+- {id: S7, name: Upgrade cost is a probability-weighted expected value, kind: structural,
+   description: "Each item costs probability x allocation x P50 in the year its lead time ends. Refunds follow the refund schedule. Monte Carlo samples costs and triggers.",
+   source: "DCOP_MODEL_SPEC.md section 5.2", as_of: 2026-10-26, confidence: medium}
+- {id: S8, name: Load profile is a synthetic placeholder shape, kind: structural,
+   description: "Peaks once a year in July and has the stated annual mean. Replace with a measured or forecast profile through load_profile_ref.",
+   source: "Modeling choice, dcop/load.py", as_of: 2026-10-26, confidence: low}
+- {id: S9, name: Tariff billing simplifications, kind: structural,
+   description: "No holiday calendar, hourly input understates the 15-minute peak, billed kW is not rounded, months with no energy are not billed.",
+   source: "dcop/grid/tariff.py", as_of: 2026-10-26, confidence: medium}
+- {id: S10, name: Hybrid path stitches the gas and grid runs at the grid energization date, kind: structural,
+   description: "Gas serves load until the grid is energized and the grid serves it after. Unserved energy is priced on the combined delivery. If the grid is energized no later than gas power, no bridge plant is built. Backup gas serves no load after the handover. Austin Energy's Standby Capacity schedule (grid as backup to on-site generation) is not part of this path.",
+   source: "DCOP_MODEL_SPEC.md section 12, open question 1; Austin Energy FY2026 tariff p.15 and p.27", as_of: 2026-10-30, confidence: low}

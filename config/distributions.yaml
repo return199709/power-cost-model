@@ -1,0 +1,48 @@
+# Monte Carlo distributions and tornado ranges (spec §7). Every value is a PLACEHOLDER.
+source: "PLACEHOLDER: ranges chosen for illustration, not fitted to data"
+as_of: 2026-10-26
+n_draws: 2000
+seed: 20261026
+
+# Gas basis: additive $/MMBtu shock, scale x (lognormal factor with mean 1, minus 1).
+# Sigma comes from each gas supply's basis_volatility.
+basis:
+  scale_usd_mmbtu: 0.50
+
+# Sample each upgrade item's cost through its P10/P50/P90 and trigger it by probability.
+upgrade_cost: true
+
+# Months of slip added to the critical-path upgrade lead times.
+interconnection_slip_months:
+  values: [0, 6, 12, 18]
+  probs: [0.50, 0.25, 0.15, 0.10]
+
+# Months of slip added to the BTM permit lead time.
+permit_slip_months:
+  values: [0, 3, 6, 12]
+  probs: [0.55, 0.25, 0.15, 0.05]
+
+# EFOR beta distribution with mean at the plant's EFOR; larger means tighter.
+efor:
+  concentration: 100
+
+# One-at-a-time ranges for the tornado. Paths take {site} {tariff} {hub} {plant} and * for
+# every list item. mode: absolute sets the value, relative scales by (1 + x), delta adds x.
+sensitivities:
+  - {label: Henry Hub price, path: "gas.{hub}.henry_hub_multiplier", mode: absolute, low: 0.75, high: 1.25}
+  - {label: Gas basis ($/MMBtu), path: "gas.{hub}.basis_adder_usd_mmbtu", mode: absolute, low: -0.25, high: 0.50}
+  - {label: Plant capex, path: "plants.{plant}.capex_usd_kw", mode: relative, low: -0.15, high: 0.15}
+  - {label: Heat rate, path: "plants.{plant}.heat_rate_mmbtu_mwh_hhv_iso", mode: relative, low: -0.05, high: 0.05}
+  - {label: Forced outage rate, path: "plants.{plant}.forced_outage_rate", mode: relative, low: -0.5, high: 0.5}
+  - {label: BTM permit lead time (months), path: "plants.{plant}.permit_lead_months", mode: delta, low: -3, high: 6}
+  - {label: Gas lateral capex, path: "gas.{hub}.lateral_capex_usd", mode: relative, low: -0.25, high: 0.25}
+  - {label: Firm transport rate, path: "gas.{hub}.transport_firm_usd_mmbtu", mode: relative, low: -0.30, high: 0.30}
+  - {label: Network upgrade cost, path: "upgrades.{site}.items.*.cost_usd_p50", mode: relative, low: -0.30, high: 0.50}
+  - {label: Interconnection lead time (months), path: "upgrades.{site}.items.*.lead_time_months", mode: delta, low: -6, high: 12}
+  - {label: Tariff real escalation, path: "tariffs.{tariff}.escalation_real_pct", mode: absolute, low: 0.0, high: 0.02}
+  - {label: Power supply adjustment rate, path: "tariffs.{tariff}.riders.name=Power Supply Adjustment.value", mode: relative, low: -0.20, high: 0.30}
+  - {label: Discount rate, path: "global.discount_rate", mode: absolute, low: 0.06, high: 0.10}
+  - {label: Value of unserved energy, path: "global.value_of_unserved_usd_mwh", mode: relative, low: -0.50, high: 0.50}
+  - {label: Backup gas transport kept after handover, path: "sites.{site}.hybrid.backup_transport_pct", mode: absolute, low: 0.0, high: 1.0}
+  - {label: Backup plant fixed O&M kept after handover, path: "sites.{site}.hybrid.backup_fixed_om_pct", mode: absolute, low: 0.25, high: 1.0}
+  - {label: Load factor, path: "sites.{site}.load_factor", mode: delta, low: -0.05, high: 0.05}
